@@ -10,7 +10,7 @@
     },
     "discord": {
       "command": "node",
-      "args": ["/root/source/discordmcp/build/index.js"]
+      "args": ["/root/source/claudes_home/discord-mcp/build/index.js"]
     }
   }
 }

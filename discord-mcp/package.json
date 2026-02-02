@@ -1,0 +1,19 @@
+{
+  "name": "discord-mcp",
+  "version": "1.0.0",
+  "description": "Discord MCP server for Claude",
+  "type": "module",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "discord.js": "^14.17.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
