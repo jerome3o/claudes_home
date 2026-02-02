@@ -18,15 +18,21 @@ import {
 import { createWriteStream, createReadStream, unlinkSync } from 'fs';
 import { pipeline } from 'stream/promises';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { config } from 'dotenv';
 import prism from 'prism-media';
 import { OpusEncoder } from '@discordjs/opus';
 
 config();
 
-// Initialize OpenAI client
+// Initialize OpenAI client (for Whisper STT and TTS)
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Initialize Anthropic client (for Claude AI responses)
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 // Discord client
@@ -110,25 +116,21 @@ async function generateSpeech(text: string, outputPath: string): Promise<void> {
  * Get AI response from Claude (via Anthropic API)
  */
 async function getAIResponse(userMessage: string): Promise<string> {
-  // If you want to use Claude instead of OpenAI, you can switch here
-  // For now, using OpenAI for simplicity
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
+    const message = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 150,
+      system: 'You are a helpful voice assistant in a Discord server. Keep responses concise and conversational since they will be spoken aloud. Aim for responses that are 1-3 sentences.',
       messages: [
-        {
-          role: 'system',
-          content: 'You are a helpful voice assistant in a Discord server. Keep responses concise and conversational since they will be spoken aloud.',
-        },
         {
           role: 'user',
           content: userMessage,
         },
       ],
-      max_tokens: 150,
     });
 
-    return completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+    const textBlock = message.content.find(block => block.type === 'text');
+    return textBlock?.text || 'Sorry, I could not generate a response.';
   } catch (error) {
     console.error('AI response error:', error);
     return 'Sorry, I encountered an error processing your request.';
