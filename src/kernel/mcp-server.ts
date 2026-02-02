@@ -7,16 +7,19 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { config } from '../config.js';
 import type { Orchestrator } from './orchestrator.js';
+import type { DiscordClient } from './discord.js';
 
 export class MCPServer {
   private app: express.Application;
   private server: Server;
   private transport: StreamableHTTPServerTransport | null = null;
   private orchestrator: Orchestrator;
+  private discord: DiscordClient;
   private httpServer: ReturnType<typeof express.application.listen> | null = null;
 
-  constructor(orchestrator: Orchestrator) {
+  constructor(orchestrator: Orchestrator, discord: DiscordClient) {
     this.orchestrator = orchestrator;
+    this.discord = discord;
     this.app = express();
     this.app.use(express.json());
 
@@ -310,6 +313,10 @@ export class MCPServer {
           const { join } = await import('path');
 
           try {
+            // Send notification to chat channel
+            await this.discord.send('chat', '🔄 **Kernel Restart Triggered**\n\nRestarting the kernel... I\'ll be back in a moment!');
+
+            // Create signal file to trigger restart
             const signalFile = join(process.cwd(), '.restart-signal');
             writeFileSync(signalFile, new Date().toISOString());
 

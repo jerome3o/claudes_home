@@ -27,7 +27,7 @@ class Kernel {
   constructor() {
     this.discord = new DiscordClient();
     this.orchestrator = new Orchestrator(process.cwd());
-    this.mcpServer = new MCPServer(this.orchestrator);
+    this.mcpServer = new MCPServer(this.orchestrator, this.discord);
 
     this.setupEventHandlers();
     this.setupShutdownHandlers();
