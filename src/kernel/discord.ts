@@ -54,6 +54,7 @@ export class DiscordClient extends EventEmitter {
       ['chat', config.discordChannelChat],
       ['verbose', config.discordChannelVerbose],
       ['text', config.discordChannelText],
+      ['screenshots', config.discordChannelScreenshots],
     ];
 
     for (const [type, id] of channelIds) {

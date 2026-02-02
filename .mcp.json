@@ -7,6 +7,10 @@
     "computer-use": {
       "command": "docker",
       "args": ["exec", "-i", "webtop", "computer-use-mcp"]
+    },
+    "discord": {
+      "command": "node",
+      "args": ["/root/source/discordmcp/build/index.js"]
     }
   }
 }

@@ -25,4 +25,4 @@ export interface RestartOptions {
 }
 
 // Discord channel types
-export type ChannelType = 'chat' | 'verbose' | 'text';
+export type ChannelType = 'chat' | 'verbose' | 'text' | 'screenshots';

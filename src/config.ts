@@ -13,6 +13,7 @@ const configSchema = z.object({
   discordChannelChat: z.string().min(1, 'DISCORD_CHANNEL_CHAT is required'),
   discordChannelVerbose: z.string().min(1, 'DISCORD_CHANNEL_VERBOSE is required'),
   discordChannelText: z.string().min(1, 'DISCORD_CHANNEL_TEXT is required'),
+  discordChannelScreenshots: z.string().min(1, 'DISCORD_CHANNEL_SCREENSHOTS is required'),
 
   // MCP Server
   mcpPort: z.number().int().positive().default(3100),
@@ -30,6 +31,7 @@ function loadConfig(): Config {
     discordChannelChat: process.env.DISCORD_CHANNEL_CHAT,
     discordChannelVerbose: process.env.DISCORD_CHANNEL_VERBOSE,
     discordChannelText: process.env.DISCORD_CHANNEL_TEXT,
+    discordChannelScreenshots: process.env.DISCORD_CHANNEL_SCREENSHOTS,
     mcpPort: process.env.MCP_PORT ? parseInt(process.env.MCP_PORT, 10) : 3100,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   };

@@ -159,7 +159,7 @@ class Kernel {
         // The image data should be base64 encoded
         if (typeof imageData === 'string') {
           console.log('[kernel] Posting screenshot to Discord...');
-          await this.discord.sendImage('chat', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
+          await this.discord.sendImage('screenshots', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
         }
       }
     } catch (error) {
