@@ -74,6 +74,35 @@ export class MCPServer {
               properties: {},
             },
           },
+          {
+            name: 'get_system_status',
+            description: 'Get comprehensive system status including kernel, MCP servers, Discord, processes, and recent logs',
+            inputSchema: {
+              type: 'object' as const,
+              properties: {},
+            },
+          },
+          {
+            name: 'get_logs',
+            description: 'Get recent logs from the system',
+            inputSchema: {
+              type: 'object' as const,
+              properties: {
+                lines: {
+                  type: 'number',
+                  description: 'Number of log lines to retrieve (default: 50, max: 500)',
+                },
+              },
+            },
+          },
+          {
+            name: 'reload_mcp_config',
+            description: 'Reload MCP server configuration from .mcp.json without full restart',
+            inputSchema: {
+              type: 'object' as const,
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -142,6 +171,130 @@ export class MCPServer {
               },
             ],
           };
+        }
+
+        case 'get_system_status': {
+          const { execSync } = await import('child_process');
+          const { readFileSync } = await import('fs');
+
+          try {
+            const status = this.orchestrator.getStatus();
+
+            // Get process info
+            const npmProcess = execSync('ps aux | grep "npm run dev" | grep -v grep || echo "not found"', { encoding: 'utf-8' });
+            const discordProcess = execSync('ps aux | grep "discord-mcp" | grep -v grep || echo "not found"', { encoding: 'utf-8' });
+
+            // Get MCP config
+            let mcpConfig: any = {};
+            try {
+              mcpConfig = JSON.parse(readFileSync('/root/source/claudes_home/.mcp.json', 'utf-8'));
+            } catch (e) {
+              mcpConfig = { error: 'Could not read .mcp.json' };
+            }
+
+            const systemStatus = {
+              kernel: {
+                uptime: status.uptime,
+                sessionId: status.sessionId ?? null,
+                state: status.state,
+              },
+              mcpServers: {
+                configured: Object.keys(mcpConfig.mcpServers || {}),
+                // Note: Actual connection status would need to be tracked separately
+              },
+              processes: {
+                npm: npmProcess.trim(),
+                discord: discordProcess.trim(),
+              },
+              timestamp: new Date().toISOString(),
+            };
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(systemStatus, null, 2),
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    error: error instanceof Error ? error.message : String(error),
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        case 'get_logs': {
+          const { execSync } = await import('child_process');
+          const lines = (args as { lines?: number })?.lines ?? 50;
+          const maxLines = Math.min(lines, 500);
+
+          try {
+            // Try to get logs from tmux
+            const logs = execSync(
+              `tmux capture-pane -t 0:1.1 -p -S -${maxLines} 2>/dev/null || echo "Could not capture tmux logs"`,
+              { encoding: 'utf-8' }
+            );
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: logs,
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    error: error instanceof Error ? error.message : String(error),
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        case 'reload_mcp_config': {
+          try {
+            this.orchestrator.reloadMcpConfig();
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    success: true,
+                    message: 'MCP configuration reloaded. Note: You may need to restart Claude for changes to take effect.',
+                  }),
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
         }
 
         default:

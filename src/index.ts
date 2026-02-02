@@ -89,8 +89,19 @@ class Kernel {
     });
 
     this.orchestrator.on('tool_result', async (result) => {
+      // Debug logging for tool results
+      console.log('[kernel] Tool result received:', {
+        id: result.id,
+        contentType: typeof result.content,
+        contentKeys: typeof result.content === 'object' && result.content !== null
+          ? Object.keys(result.content)
+          : 'not an object',
+        hasOutputImage: typeof result.content === 'object' && result.content !== null && 'output_image' in result.content,
+      });
+
       // Check if this is a computer-use screenshot
       if (this.isComputerUseScreenshot(result)) {
+        console.log('[kernel] Computer-use screenshot detected! Posting to Discord...');
         await this.handleScreenshot(result);
       }
 
