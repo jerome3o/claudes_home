@@ -1,0 +1,5 @@
+FROM lscr.io/linuxserver/webtop:latest
+
+RUN apk add --no-cache nodejs npm
+
+RUN npm install -g computer-use-mcp

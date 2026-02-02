@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kernel": {
+      "type": "http",
+      "url": "http://localhost:3100/mcp"
+    },
+    "computer-use": {
+      "command": "docker",
+      "args": ["exec", "-i", "webtop", "computer-use-mcp"]
+    }
+  }
+}
