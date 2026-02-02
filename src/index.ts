@@ -151,9 +151,20 @@ class Kernel {
    * Check if a tool result contains a computer-use screenshot
    */
   private isComputerUseScreenshot(result: any): boolean {
+    let content = result.content;
+
+    // Try to parse if it's a string
+    if (typeof content === 'string') {
+      try {
+        content = JSON.parse(content);
+      } catch (e) {
+        return false;
+      }
+    }
+
     // Computer-use tool returns output_image in the content
-    if (typeof result.content === 'object' && result.content !== null) {
-      return 'output_image' in result.content;
+    if (typeof content === 'object' && content !== null) {
+      return 'output_image' in content;
     }
     return false;
   }
@@ -163,7 +174,18 @@ class Kernel {
    */
   private async handleScreenshot(result: any): Promise<void> {
     try {
-      const content = result.content;
+      let content = result.content;
+
+      // Try to parse if it's a string
+      if (typeof content === 'string') {
+        try {
+          content = JSON.parse(content);
+        } catch (e) {
+          console.error('[kernel] Failed to parse tool result content as JSON');
+          return;
+        }
+      }
+
       if (content && typeof content === 'object' && 'output_image' in content) {
         const imageData = content.output_image;
 
@@ -171,6 +193,7 @@ class Kernel {
         if (typeof imageData === 'string') {
           console.log('[kernel] Posting screenshot to Discord...');
           await this.discord.sendImage('screenshots', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
+          console.log('[kernel] Screenshot posted successfully!');
         }
       }
     } catch (error) {
