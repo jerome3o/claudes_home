@@ -103,6 +103,14 @@ export class MCPServer {
               properties: {},
             },
           },
+          {
+            name: 'restart_kernel',
+            description: 'Trigger a full kernel restart by signaling the restart daemon. This will restart the entire npm process and create a fresh session.',
+            inputSchema: {
+              type: 'object' as const,
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -277,6 +285,41 @@ export class MCPServer {
                   text: JSON.stringify({
                     success: true,
                     message: 'MCP configuration reloaded. Note: You may need to restart Claude for changes to take effect.',
+                  }),
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        case 'restart_kernel': {
+          const { writeFileSync } = await import('fs');
+          const { join } = await import('path');
+
+          try {
+            const signalFile = join(process.cwd(), '.restart-signal');
+            writeFileSync(signalFile, new Date().toISOString());
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    success: true,
+                    message: 'Restart signal sent. Kernel will restart shortly.',
                   }),
                 },
               ],
