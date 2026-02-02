@@ -89,6 +89,11 @@ class Kernel {
     });
 
     this.orchestrator.on('tool_result', async (result) => {
+      // Check if this is a computer-use screenshot
+      if (this.isComputerUseScreenshot(result)) {
+        await this.handleScreenshot(result);
+      }
+
       await this.discord.sendVerbose('tool_result', {
         id: result.id,
         // Truncate large results
@@ -129,6 +134,37 @@ class Kernel {
       console.log(`State changed to: ${state}`);
       await this.discord.sendVerbose('stateChange', { state });
     });
+  }
+
+  /**
+   * Check if a tool result contains a computer-use screenshot
+   */
+  private isComputerUseScreenshot(result: any): boolean {
+    // Computer-use tool returns output_image in the content
+    if (typeof result.content === 'object' && result.content !== null) {
+      return 'output_image' in result.content;
+    }
+    return false;
+  }
+
+  /**
+   * Handle posting a screenshot to Discord
+   */
+  private async handleScreenshot(result: any): Promise<void> {
+    try {
+      const content = result.content;
+      if (content && typeof content === 'object' && 'output_image' in content) {
+        const imageData = content.output_image;
+
+        // The image data should be base64 encoded
+        if (typeof imageData === 'string') {
+          console.log('[kernel] Posting screenshot to Discord...');
+          await this.discord.sendImage('chat', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
+        }
+      }
+    } catch (error) {
+      console.error('[kernel] Failed to post screenshot:', error);
+    }
   }
 
   private setupShutdownHandlers(): void {

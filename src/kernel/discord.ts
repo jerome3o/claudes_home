@@ -4,6 +4,7 @@ import {
   TextChannel,
   Message,
   Events,
+  AttachmentBuilder,
 } from 'discord.js';
 import { config } from '../config.js';
 import { ChannelType } from '../types.js';
@@ -148,6 +149,40 @@ export class DiscordClient extends EventEmitter {
     const json = JSON.stringify(data, null, 2);
     const content = `**${label}**\n\`\`\`json\n${json}\n\`\`\``;
     await this.send('verbose', content);
+  }
+
+  /**
+   * Send an image (from base64 or buffer) to a specific channel
+   */
+  async sendImage(
+    channelType: ChannelType,
+    imageData: Buffer | string,
+    filename = 'screenshot.png',
+    message?: string
+  ): Promise<void> {
+    const channel = this.channels.get(channelType);
+    if (!channel) {
+      console.error(`Channel ${channelType} not available`);
+      return;
+    }
+
+    try {
+      let buffer: Buffer;
+      if (typeof imageData === 'string') {
+        // Assume base64
+        buffer = Buffer.from(imageData, 'base64');
+      } else {
+        buffer = imageData;
+      }
+
+      const attachment = new AttachmentBuilder(buffer, { name: filename });
+      await channel.send({
+        content: message || '',
+        files: [attachment],
+      });
+    } catch (error) {
+      console.error(`Failed to send image to ${channelType}:`, error);
+    }
   }
 
   /**

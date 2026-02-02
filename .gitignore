@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 .claude-session
+
+# Docker shared folders
+shared/
+downloads/

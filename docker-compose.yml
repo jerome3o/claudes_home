@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  webtop:
+    image: webtop-mcp
+    container_name: webtop
+    privileged: true
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - TITLE=Claude Desktop
+      # Standard resolution options: 1920x1080, 1280x720, 1024x768
+      - CUSTOM_RES_W=1920
+      - CUSTOM_RES_H=1080
+      # Enable Docker in Docker
+      - START_DOCKER=true
+    volumes:
+      # Persistent browser data (Firefox profile)
+      - webtop-config:/config
+      # Shared folder for file exchange between host and container
+      - ./shared:/shared
+      # Persistent downloads folder
+      - ./downloads:/config/Downloads
+    ports:
+      - "3000:3000"   # Web interface
+      - "3001:3001"   # Audio (if needed)
+    restart: unless-stopped
+    shm_size: "2gb"  # Increased shared memory for browser performance
+
+volumes:
+  webtop-config:
+    name: webtop-config
