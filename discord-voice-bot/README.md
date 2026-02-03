@@ -7,9 +7,9 @@ A voice-enabled Discord bot that can:
 
 ## Features
 
-- 🎤 **Speech-to-Text**: Uses OpenAI Whisper to transcribe voice
-- 🗣️ **Text-to-Speech**: Uses OpenAI TTS to speak responses
-- 🤖 **AI Responses**: Processes speech and generates intelligent responses
+- 🎤 **Speech-to-Text**: Uses Google Cloud Speech-to-Text to transcribe voice
+- 🗣️ **Text-to-Speech**: Uses Google Cloud Text-to-Speech to speak responses
+- 🤖 **AI Responses**: Uses Claude 3.5 Sonnet via Anthropic API for intelligent responses
 - 🎵 **Voice Channel Management**: Join/leave voice channels via commands
 
 ## Prerequisites
@@ -23,14 +23,18 @@ A voice-enabled Discord bot that can:
      - Message Content
    - Add bot to your server with Voice permissions
 
-2. **OpenAI API Key**
-   - Get an API key from [OpenAI](https://platform.openai.com/)
-   - Need access to:
-     - Whisper API (speech-to-text)
-     - TTS API (text-to-speech)
-     - GPT-4 API (AI responses)
+2. **Google Cloud Project & Service Account**
+   - Create a project at [Google Cloud Console](https://console.cloud.google.com/)
+   - Enable these APIs:
+     - Cloud Speech-to-Text API
+     - Cloud Text-to-Speech API
+   - Create a service account and download the JSON key file
 
-3. **System Dependencies**
+3. **Anthropic API Key**
+   - Get an API key from [Anthropic](https://console.anthropic.com/)
+   - Need access to Claude 3.5 Sonnet
+
+4. **System Dependencies**
    - Node.js 18+
    - ffmpeg (for audio conversion)
 
@@ -50,12 +54,15 @@ brew install ffmpeg
 
 ## Configuration
 
-Create a `.env` file:
+1. Create a `.env` file:
 
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token_here
-OPENAI_API_KEY=your_openai_api_key_here
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/service-account-key.json
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ```
+
+2. Place your Google Cloud service account JSON key file in a secure location and update the path in `.env`
 
 ## Building
 
@@ -106,10 +113,10 @@ Bot: ✅ Spoken!
 1. **User speaks** in voice channel
 2. **Bot detects speech** (after 1 second of silence)
 3. **Audio is recorded** as PCM
-4. **Converted to WAV** using ffmpeg
-5. **Transcribed** using OpenAI Whisper
-6. **AI generates response** using GPT-4
-7. **Response converted to speech** using OpenAI TTS
+4. **Converted to FLAC** using ffmpeg
+5. **Transcribed** using Google Cloud Speech-to-Text
+6. **AI generates response** using Claude 3.5 Sonnet
+7. **Response converted to speech** using Google Cloud Text-to-Speech
 8. **Bot speaks** the response in voice channel
 
 ### Architecture
@@ -125,22 +132,22 @@ Bot: ✅ Spoken!
 │  Discord Bot    │
 │  Voice Receiver │
 └──────┬──────────┘
-       │ Opus → PCM → WAV
+       │ Opus → PCM → FLAC
        ▼
 ┌─────────────────┐
-│  OpenAI Whisper │
+│ Google Cloud STT│
 │  (Speech-to-Text)│
 └──────┬──────────┘
        │ Transcript
        ▼
 ┌─────────────────┐
-│     GPT-4       │
+│  Claude 3.5     │
 │  (AI Response)  │
 └──────┬──────────┘
        │ Response Text
        ▼
 ┌─────────────────┐
-│   OpenAI TTS    │
+│ Google Cloud TTS│
 │ (Text-to-Speech)│
 └──────┬──────────┘
        │ Audio MP3
@@ -156,16 +163,16 @@ Bot: ✅ Spoken!
 
 ## API Costs
 
-Using OpenAI APIs:
-- **Whisper**: $0.006 per minute of audio
-- **TTS**: $15 per 1M characters
-- **GPT-4**: ~$0.03 per 1k tokens
+Using Google Cloud and Anthropic APIs:
+- **Google Cloud STT**: $0.006 per 15 seconds of audio ($0.024/minute)
+- **Google Cloud TTS**: $16 per 1M characters (Neural2 voices)
+- **Claude 3.5 Sonnet**: $3 per 1M input tokens, $15 per 1M output tokens
 
 Typical conversation:
-- 10 second voice message: ~$0.001
-- AI response generation: ~$0.003
-- TTS response: ~$0.0015
-- **Total per exchange**: ~$0.006
+- 10 second voice message (STT): ~$0.004
+- AI response generation (Claude): ~$0.001
+- TTS response: ~$0.002
+- **Total per exchange**: ~$0.007
 
 ## Alternative STT/TTS Options
 
@@ -188,10 +195,10 @@ Typical conversation:
 
 ### Cloud Services
 
-1. **Google Cloud**
-   - Speech-to-Text API
-   - Text-to-Speech API
-   - Usually cheaper than OpenAI for high volume
+1. **OpenAI**
+   - Whisper API (speech-to-text)
+   - TTS API (text-to-speech)
+   - Good quality, simple API
 
 2. **Azure Cognitive Services**
    - Speech Services
@@ -205,19 +212,12 @@ Typical conversation:
 
 ### Change AI Model
 
-Edit `src/index.ts`:
+Edit `src/index.ts` to use a different Claude model:
 
 ```typescript
-// Use Claude instead of GPT-4
-import Anthropic from '@anthropic-ai/sdk';
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
 async function getAIResponse(userMessage: string): Promise<string> {
   const response = await anthropic.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-3-opus-20240229', // or claude-3-sonnet-20240229
     max_tokens: 150,
     messages: [{
       role: 'user',
@@ -231,14 +231,22 @@ async function getAIResponse(userMessage: string): Promise<string> {
 
 ### Change TTS Voice
 
-Available OpenAI voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
+Available Google Cloud voices can be found [here](https://cloud.google.com/text-to-speech/docs/voices). Popular options:
 
 ```typescript
-const mp3 = await openai.audio.speech.create({
-  model: 'tts-1',
-  voice: 'nova', // Change here
-  input: text,
-});
+const request = {
+  input: { text },
+  voice: {
+    languageCode: 'en-US',
+    name: 'en-US-Neural2-A', // Male voice
+    // or 'en-US-Neural2-C' for female
+    // or 'en-GB-Neural2-B' for British male
+    ssmlGender: 'MALE' as const,
+  },
+  audioConfig: {
+    audioEncoding: 'MP3' as const,
+  },
+};
 ```
 
 ### Adjust Silence Detection
@@ -258,7 +266,8 @@ const audioStream = receiver.subscribe(userId, {
 
 - Make sure bot has "Use Voice Activity" permission
 - Check that `selfDeaf: false` in `joinVoiceChannel`
-- Verify OpenAI API key is valid
+- Verify Google Cloud credentials are valid and APIs are enabled
+- Check that `GOOGLE_APPLICATION_CREDENTIALS` path is correct
 
 ### Audio quality issues
 
@@ -268,9 +277,10 @@ const audioStream = receiver.subscribe(userId, {
 
 ### High latency
 
-- Use `tts-1` (faster) instead of `tts-1-hd`
-- Reduce GPT-4 max_tokens
+- Use standard voices instead of Neural2 voices for faster TTS
+- Reduce Claude max_tokens
 - Consider caching common responses
+- Use streaming for longer responses
 
 ## Project Structure
 
@@ -303,8 +313,8 @@ MIT
 ## Sources & References
 
 - [Discord.js Voice Documentation](https://discord.js.org/docs/packages/voice/stable)
-- [OpenAI Whisper API](https://platform.openai.com/docs/guides/speech-to-text)
-- [OpenAI TTS API](https://platform.openai.com/docs/guides/text-to-speech)
+- [Google Cloud Speech-to-Text API](https://cloud.google.com/speech-to-text/docs)
+- [Google Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech/docs)
+- [Anthropic Claude API](https://docs.anthropic.com/claude/reference/getting-started-with-the-api)
 - [DiscordSpeechBot](https://github.com/inevolin/DiscordSpeechBot)
 - [discord-speech-recognition](https://github.com/Rei-x/discord-speech-recognition)
-- [Gladia Voice-to-Text Guide](https://www.gladia.io/blog/how-to-build-a-voice-to-text-discord-bot-with-gladia-real-time-transcription-api)

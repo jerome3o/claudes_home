@@ -15,9 +15,10 @@ import {
   getVoiceConnection,
   EndBehaviorType,
 } from '@discordjs/voice';
-import { createWriteStream, createReadStream, unlinkSync } from 'fs';
+import { createWriteStream, createReadStream, unlinkSync, readFileSync } from 'fs';
 import { pipeline } from 'stream/promises';
-import OpenAI from 'openai';
+import { SpeechClient } from '@google-cloud/speech';
+import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from 'dotenv';
 import prism from 'prism-media';
@@ -25,10 +26,9 @@ import { OpusEncoder } from '@discordjs/opus';
 
 config();
 
-// Initialize OpenAI client (for Whisper STT and TTS)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Initialize Google Cloud clients (for Speech-to-Text and Text-to-Speech)
+const speechClient = new SpeechClient();
+const ttsClient = new TextToSpeechClient();
 
 // Initialize Anthropic client (for Claude AI responses)
 const anthropic = new Anthropic({
@@ -51,9 +51,9 @@ const recordings = new Map<string, Map<string, NodeJS.WritableStream>>();
 const audioPlayers = new Map<string, ReturnType<typeof createAudioPlayer>>();
 
 /**
- * Convert PCM audio to WAV format (for Whisper API)
+ * Convert PCM audio to FLAC format (for Google Speech-to-Text API)
  */
-function pcmToWav(pcmFile: string, wavFile: string): Promise<void> {
+function pcmToFlac(pcmFile: string, flacFile: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const ffmpeg = require('ffmpeg-static');
     const { spawn } = require('child_process');
@@ -63,7 +63,7 @@ function pcmToWav(pcmFile: string, wavFile: string): Promise<void> {
       '-ar', '48000',
       '-ac', '2',
       '-i', pcmFile,
-      wavFile
+      flacFile
     ]);
 
     process.on('close', (code: number) => {
@@ -76,17 +76,31 @@ function pcmToWav(pcmFile: string, wavFile: string): Promise<void> {
 }
 
 /**
- * Transcribe audio using OpenAI Whisper
+ * Transcribe audio using Google Cloud Speech-to-Text
  */
 async function transcribeAudio(audioFilePath: string): Promise<string> {
   try {
-    const transcription = await openai.audio.transcriptions.create({
-      file: createReadStream(audioFilePath),
-      model: 'whisper-1',
-      language: 'en',
-    });
+    const audioBytes = readFileSync(audioFilePath).toString('base64');
 
-    return transcription.text;
+    const request = {
+      audio: {
+        content: audioBytes,
+      },
+      config: {
+        encoding: 'FLAC' as const,
+        sampleRateHertz: 48000,
+        languageCode: 'en-US',
+        audioChannelCount: 2,
+      },
+    };
+
+    const [response] = await speechClient.recognize(request);
+    const transcription = response.results
+      ?.map(result => result.alternatives?.[0]?.transcript)
+      .filter(Boolean)
+      .join('\n') || '';
+
+    return transcription;
   } catch (error) {
     console.error('Transcription error:', error);
     throw error;
@@ -94,18 +108,26 @@ async function transcribeAudio(audioFilePath: string): Promise<string> {
 }
 
 /**
- * Generate speech using OpenAI TTS
+ * Generate speech using Google Cloud Text-to-Speech
  */
 async function generateSpeech(text: string, outputPath: string): Promise<void> {
   try {
-    const mp3 = await openai.audio.speech.create({
-      model: 'tts-1',
-      voice: 'alloy',
-      input: text,
-    });
+    const request = {
+      input: { text },
+      voice: {
+        languageCode: 'en-US',
+        name: 'en-US-Neural2-C', // Female voice
+        ssmlGender: 'FEMALE' as const,
+      },
+      audioConfig: {
+        audioEncoding: 'MP3' as const,
+      },
+    };
 
-    const buffer = Buffer.from(await mp3.arrayBuffer());
-    await require('fs').promises.writeFile(outputPath, buffer);
+    const [response] = await ttsClient.synthesizeSpeech(request);
+    if (response.audioContent) {
+      await require('fs').promises.writeFile(outputPath, response.audioContent);
+    }
   } catch (error) {
     console.error('TTS error:', error);
     throw error;
@@ -204,13 +226,13 @@ function startRecording(connection: VoiceConnection, userId: string, guildId: st
     await new Promise(resolve => setTimeout(resolve, 500));
 
     try {
-      // Convert PCM to WAV
-      const wavFilename = filename.replace('.pcm', '.wav');
-      await pcmToWav(filename, wavFilename);
+      // Convert PCM to FLAC
+      const flacFilename = filename.replace('.pcm', '.flac');
+      await pcmToFlac(filename, flacFilename);
 
       // Transcribe
       console.log(`Transcribing audio for user ${userId}...`);
-      const transcript = await transcribeAudio(wavFilename);
+      const transcript = await transcribeAudio(flacFilename);
       console.log(`Transcript: ${transcript}`);
 
       if (transcript.trim().length > 0) {
@@ -232,7 +254,7 @@ function startRecording(connection: VoiceConnection, userId: string, guildId: st
 
       // Cleanup temp files
       unlinkSync(filename);
-      unlinkSync(wavFilename);
+      unlinkSync(flacFilename);
     } catch (error) {
       console.error('Error processing audio:', error);
     }

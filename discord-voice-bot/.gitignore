@@ -3,5 +3,7 @@ build/
 .env
 *.pcm
 *.wav
+*.flac
 *.mp3
+*.json
 /tmp/
