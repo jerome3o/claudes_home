@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Claude</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+</head>
+<body>
+  <!-- Sidebar -->
+  <div id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <h2>Sessions</h2>
+      <button id="closeSidebar" class="icon-btn">✕</button>
+    </div>
+
+    <button id="newSessionBtn" class="btn-primary">+ New Session</button>
+
+    <div id="sessionList" class="session-list"></div>
+
+    <div class="sidebar-footer">
+      <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div id="main" class="main">
+    <!-- Header -->
+    <div class="header">
+      <button id="menuBtn" class="icon-btn">☰</button>
+      <h1 id="sessionTitle">Claude</h1>
+      <button id="interruptBtn" class="icon-btn" style="display: none;">⏸</button>
+    </div>
+
+    <!-- Messages -->
+    <div id="messages" class="messages"></div>
+
+    <!-- Input -->
+    <div class="input-container">
+      <textarea id="messageInput" placeholder="Message Claude..." rows="1"></textarea>
+      <button id="sendBtn" class="send-btn">↑</button>
+    </div>
+  </div>
+
+  <!-- MCP Config Modal -->
+  <div id="mcpModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>MCP Configuration</h2>
+        <button id="closeMcpModal" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-text">Configure MCP servers (JSON format)</p>
+        <textarea id="mcpConfig" class="mcp-config-editor" placeholder='{\n  "server-name": {\n    "type": "stdio",\n    "command": "node",\n    "args": ["path/to/server.js"]\n  }\n}'></textarea>
+      </div>
+      <div class="modal-footer">
+        <button id="saveMcpConfig" class="btn-primary">Save</button>
+        <button id="cancelMcpConfig" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

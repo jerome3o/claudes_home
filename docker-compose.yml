@@ -10,9 +10,11 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       - TITLE=Claude Desktop
-      # Standard resolution options: 1920x1080, 1280x720, 1024x768
-      - CUSTOM_RES_W=1920
-      - CUSTOM_RES_H=1080
+      # Fixed resolution settings - prevents resolution shuffling
+      - SELKIES_MANUAL_WIDTH=1920|locked
+      - SELKIES_MANUAL_HEIGHT=1080|locked
+      - SELKIES_IS_MANUAL_RESOLUTION_MODE=true
+      - MAX_RESOLUTION=1920x1080
       # Enable Docker in Docker
       - START_DOCKER=true
     volumes:

@@ -90,14 +90,23 @@ class Kernel {
 
     this.orchestrator.on('tool_result', async (result) => {
       // Debug logging for tool results
-      console.log('[kernel] Tool result received:', {
+      const content = result.content;
+      const debugInfo: any = {
         id: result.id,
-        contentType: typeof result.content,
-        contentKeys: typeof result.content === 'object' && result.content !== null
-          ? Object.keys(result.content)
-          : 'not an object',
-        hasOutputImage: typeof result.content === 'object' && result.content !== null && 'output_image' in result.content,
-      });
+        contentType: typeof content,
+        isArray: Array.isArray(content),
+      };
+
+      if (Array.isArray(content)) {
+        debugInfo.arrayLength = content.length;
+        debugInfo.blockTypes = content.map((block: any) =>
+          block && typeof block === 'object' ? Object.keys(block).join(',') : typeof block
+        );
+      } else if (typeof content === 'object' && content !== null) {
+        debugInfo.objectKeys = Object.keys(content);
+      }
+
+      console.log('[kernel] Tool result received:', debugInfo);
 
       // Check if this is a computer-use screenshot
       if (this.isComputerUseScreenshot(result)) {
@@ -162,10 +171,18 @@ class Kernel {
       }
     }
 
-    // Computer-use tool returns output_image in the content
+    // MCP returns content as an array of content blocks
+    if (Array.isArray(content)) {
+      return content.some(block =>
+        block && typeof block === 'object' && 'output_image' in block
+      );
+    }
+
+    // Also check if it's a direct object (for backwards compatibility)
     if (typeof content === 'object' && content !== null) {
       return 'output_image' in content;
     }
+
     return false;
   }
 
@@ -186,15 +203,27 @@ class Kernel {
         }
       }
 
-      if (content && typeof content === 'object' && 'output_image' in content) {
-        const imageData = content.output_image;
+      let imageData: string | undefined;
 
-        // The image data should be base64 encoded
-        if (typeof imageData === 'string') {
-          console.log('[kernel] Posting screenshot to Discord...');
-          await this.discord.sendImage('screenshots', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
-          console.log('[kernel] Screenshot posted successfully!');
+      // MCP returns content as an array of content blocks
+      if (Array.isArray(content)) {
+        const imageBlock = content.find(block =>
+          block && typeof block === 'object' && 'output_image' in block
+        );
+        if (imageBlock) {
+          imageData = imageBlock.output_image;
         }
+      }
+      // Also check if it's a direct object (for backwards compatibility)
+      else if (content && typeof content === 'object' && 'output_image' in content) {
+        imageData = content.output_image;
+      }
+
+      // The image data should be base64 encoded
+      if (typeof imageData === 'string') {
+        console.log('[kernel] Posting screenshot to Discord...');
+        await this.discord.sendImage('screenshots', imageData, 'screenshot.png', '🖥️ Desktop Screenshot');
+        console.log('[kernel] Screenshot posted successfully!');
       }
     } catch (error) {
       console.error('[kernel] Failed to post screenshot:', error);
