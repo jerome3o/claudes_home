@@ -17,11 +17,11 @@
   --success-color: #10b981;
   --error-color: #ef4444;
   --tool-bg: #1e1e1e;
+  --sidebar-width: 280px;
 }
 
 html {
   height: 100%;
-  /* For mobile browsers - use visual viewport height */
   height: 100dvh;
 }
 
@@ -33,28 +33,42 @@ body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Safe area for notched devices */
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+
+/* App container - flex row for sidebar + main on desktop */
+.app-container {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
 }
 
 /* Sidebar */
 .sidebar {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 280px;
-  height: 100vh;
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100%;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  transform: translateX(-100%);
-  transition: transform 0.3s ease;
   z-index: 1000;
 }
 
-.sidebar.open {
-  transform: translateX(0);
+/* Mobile: sidebar is an overlay */
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
 }
 
 .sidebar-header {
@@ -111,10 +125,11 @@ body {
 
 /* Main */
 .main {
+  flex: 1;
+  min-width: 0; /* prevent flex overflow */
   height: 100%;
   display: flex;
   flex-direction: column;
-  transition: margin-left 0.3s ease;
   position: relative;
 }
 
@@ -125,6 +140,7 @@ body {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
   min-height: 60px;
+  flex-shrink: 0;
 }
 
 .header h1 {
@@ -133,6 +149,9 @@ body {
   font-weight: 600;
   text-align: center;
   margin: 0 0.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Messages */
@@ -142,8 +161,6 @@ body {
   padding: 1rem;
   padding-bottom: 0.5rem;
   scroll-behavior: smooth;
-  /* Ensure messages don't get hidden behind input on mobile */
-  margin-bottom: 0;
 }
 
 .message {
@@ -195,6 +212,7 @@ body {
 .message-content {
   line-height: 1.6;
   word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 /* Markdown styling */
@@ -358,9 +376,7 @@ body {
   display: flex;
   gap: 0.75rem;
   align-items: flex-end;
-  position: sticky;
-  bottom: 0;
-  z-index: 100;
+  flex-shrink: 0;
 }
 
 #messageInput {
@@ -421,6 +437,7 @@ body {
   align-items: center;
   justify-content: center;
   transition: background 0.2s;
+  flex-shrink: 0;
 }
 
 .icon-btn:hover {
@@ -567,17 +584,17 @@ body {
   background: var(--error-color);
 }
 
-/* Responsive - Tablet/Pixel Fold unfolded */
+/* ==============================
+   Responsive - Mobile (<768px)
+   ============================== */
+@media (max-width: 767px) {
+  /* Sidebar is overlay (handled above) */
+}
+
+/* ==============================
+   Responsive - Tablet+ (>=768px)
+   ============================== */
 @media (min-width: 768px) {
-  .sidebar {
-    transform: translateX(0);
-    position: relative;
-  }
-
-  .main {
-    margin-left: 0;
-  }
-
   #menuBtn {
     display: none;
   }
@@ -599,26 +616,210 @@ body {
   }
 }
 
-/* Large screens */
+/* ==============================
+   Responsive - Desktop (>=1024px)
+   ============================== */
 @media (min-width: 1024px) {
   .messages {
-    padding: 2rem auto;
+    padding: 2rem 3rem;
   }
 
   .message {
     max-width: 900px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-
-  .input-container {
-    max-width: 900px;
-    margin: 0 auto;
-    width: 100%;
   }
 }
 
-/* Scrollbar styling */
+/* ====================================
+   VNC Viewer (Picture-in-Picture)
+   ==================================== */
+.vnc-viewer {
+  position: fixed;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  z-index: 1500;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  min-height: 180px;
+}
+
+/* Smooth transitions only when not dragging/resizing */
+.vnc-viewer:not(.dragging):not(.resizing) {
+  transition: all 0.3s ease;
+}
+
+/* Default PIP size (bottom-right corner) */
+.vnc-viewer.pip {
+  bottom: 120px;
+  right: 20px;
+  width: 480px;
+  height: 340px;
+}
+
+/* Minimized state (small pill in corner) */
+.vnc-viewer.minimized {
+  bottom: 100px;
+  right: 20px;
+  width: auto;
+  height: auto;
+  border-radius: 2rem;
+}
+
+.vnc-viewer.minimized .vnc-content {
+  display: none;
+}
+
+.vnc-viewer.minimized .vnc-resize-handle {
+  display: none;
+}
+
+.vnc-viewer.minimized .vnc-header {
+  cursor: pointer;
+  border-bottom: none;
+  padding: 0.5rem 1rem;
+  gap: 0.5rem;
+}
+
+.vnc-viewer.minimized .vnc-controls {
+  display: none;
+}
+
+/* Maximized state */
+.vnc-viewer.maximized {
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  width: auto;
+  height: auto;
+  border-radius: 0.75rem;
+}
+
+.vnc-viewer.maximized .vnc-resize-handle {
+  display: none;
+}
+
+.vnc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  cursor: move;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.vnc-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.vnc-controls {
+  display: flex;
+  gap: 0.125rem;
+}
+
+.vnc-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, color 0.2s;
+}
+
+.vnc-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* Close button turns red on hover */
+#vncCloseBtn:hover {
+  background: var(--error-color);
+  color: white;
+}
+
+.vnc-content {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+
+.vnc-content iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* Resize handle (bottom-right corner) */
+.vnc-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  z-index: 10;
+}
+
+.vnc-resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--text-tertiary);
+  border-bottom: 2px solid var(--text-tertiary);
+}
+
+/* Disable iframe pointer events during drag/resize */
+.vnc-viewer.dragging .vnc-content iframe,
+.vnc-viewer.resizing .vnc-content iframe {
+  pointer-events: none;
+}
+
+/* Mobile adjustments for VNC */
+@media (max-width: 767px) {
+  .vnc-viewer.pip {
+    width: calc(100vw - 40px);
+    height: 250px;
+    bottom: 100px;
+    right: 20px;
+    left: 20px;
+  }
+
+  .vnc-viewer.maximized {
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 0;
+  }
+
+  .vnc-viewer.minimized {
+    bottom: 80px;
+  }
+}
+
+/* ============================
+   Scrollbar styling
+   ============================ */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

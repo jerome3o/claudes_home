@@ -10,13 +10,14 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       - TITLE=Claude Desktop
-      # Fixed resolution settings - prevents resolution shuffling
-      - SELKIES_MANUAL_WIDTH=1920|locked
-      - SELKIES_MANUAL_HEIGHT=1080|locked
-      - SELKIES_IS_MANUAL_RESOLUTION_MODE=true
-      - MAX_RESOLUTION=1920x1080
+      # Fixed resolution settings
+      - SELKIES_MANUAL_WIDTH=1920
+      - SELKIES_MANUAL_HEIGHT=1080
+      # Lock DPI to 96 (prevents client devicePixelRatio from scaling UI)
+      - SELKIES_SCALING_DPI=96
       # Enable Docker in Docker
       - START_DOCKER=true
+    network_mode: host
     volumes:
       # Persistent browser data (Firefox profile)
       - webtop-config:/config
@@ -24,9 +25,7 @@ services:
       - ./shared:/shared
       # Persistent downloads folder
       - ./downloads:/config/Downloads
-    ports:
-      - "3000:3000"   # Web interface
-      - "3001:3001"   # Audio (if needed)
+    # ports not needed with network_mode: host (3000 HTTP, 3001 HTTPS)
     restart: unless-stopped
     shm_size: "2gb"  # Increased shared memory for browser performance
 

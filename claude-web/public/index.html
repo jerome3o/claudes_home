@@ -10,38 +10,42 @@
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
 </head>
 <body>
-  <!-- Sidebar -->
-  <div id="sidebar" class="sidebar">
-    <div class="sidebar-header">
-      <h2>Sessions</h2>
-      <button id="closeSidebar" class="icon-btn">✕</button>
+  <!-- App container for flex layout -->
+  <div class="app-container">
+    <!-- Sidebar -->
+    <div id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <h2>Sessions</h2>
+        <button id="closeSidebar" class="icon-btn">✕</button>
+      </div>
+
+      <button id="newSessionBtn" class="btn-primary">+ New Session</button>
+
+      <div id="sessionList" class="session-list"></div>
+
+      <div class="sidebar-footer">
+        <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
+      </div>
     </div>
 
-    <button id="newSessionBtn" class="btn-primary">+ New Session</button>
+    <!-- Main content -->
+    <div id="main" class="main">
+      <!-- Header -->
+      <div class="header">
+        <button id="menuBtn" class="icon-btn">☰</button>
+        <h1 id="sessionTitle">Claude</h1>
+        <button id="vncToggleBtn" class="icon-btn" title="Toggle VNC View">🖥️</button>
+        <button id="interruptBtn" class="icon-btn" style="display: none;">⏸</button>
+      </div>
 
-    <div id="sessionList" class="session-list"></div>
+      <!-- Messages -->
+      <div id="messages" class="messages"></div>
 
-    <div class="sidebar-footer">
-      <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
-    </div>
-  </div>
-
-  <!-- Main content -->
-  <div id="main" class="main">
-    <!-- Header -->
-    <div class="header">
-      <button id="menuBtn" class="icon-btn">☰</button>
-      <h1 id="sessionTitle">Claude</h1>
-      <button id="interruptBtn" class="icon-btn" style="display: none;">⏸</button>
-    </div>
-
-    <!-- Messages -->
-    <div id="messages" class="messages"></div>
-
-    <!-- Input -->
-    <div class="input-container">
-      <textarea id="messageInput" placeholder="Message Claude..." rows="1"></textarea>
-      <button id="sendBtn" class="send-btn">↑</button>
+      <!-- Input -->
+      <div class="input-container">
+        <textarea id="messageInput" placeholder="Message Claude..." rows="1"></textarea>
+        <button id="sendBtn" class="send-btn">↑</button>
+      </div>
     </div>
   </div>
 
@@ -61,6 +65,23 @@
         <button id="cancelMcpConfig" class="btn-secondary">Cancel</button>
       </div>
     </div>
+  </div>
+
+  <!-- VNC Viewer (Picture-in-Picture) -->
+  <div id="vncViewer" class="vnc-viewer" style="display: none;">
+    <div class="vnc-header">
+      <span class="vnc-title">🖥️ Webtop VNC</span>
+      <div class="vnc-controls">
+        <button id="vncMinimizeBtn" class="vnc-btn" title="Minimize">−</button>
+        <button id="vncMaximizeBtn" class="vnc-btn" title="Maximize">□</button>
+        <button id="vncCloseBtn" class="vnc-btn" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="vnc-content">
+      <iframe id="vncFrame" frameborder="0" allow="clipboard-read; clipboard-write"></iframe>
+    </div>
+    <!-- Resize handle -->
+    <div class="vnc-resize-handle"></div>
   </div>
 
   <script src="/app.js"></script>

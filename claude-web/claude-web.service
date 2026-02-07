@@ -1,0 +1,21 @@
+[Unit]
+Description=Claude Web Frontend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/source/claudes_home/claude-web
+ExecStart=/root/.nvm/versions/node/v20.20.0/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/claude-web/output.log
+StandardError=append:/var/log/claude-web/error.log
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="PORT=8080"
+Environment="PATH=/root/.nvm/versions/node/v20.20.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target
