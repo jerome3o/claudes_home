@@ -1,6 +1,6 @@
 // Claude Agent PWA Service Worker
 // Increment CACHE_NAME to bust cache on deployments
-const CACHE_NAME = 'claude-v1';
+const CACHE_NAME = 'claude-v16';
 
 const PRECACHE_URLS = [
   '/',

@@ -40,8 +40,68 @@
       <div class="header">
         <button id="menuBtn" class="icon-btn">☰</button>
         <h1 id="sessionTitle">Claude</h1>
+        <div id="connStatus" class="conn-status" title="Connection status">
+          <span id="connDot" class="conn-dot"></span>
+          <span id="connLabel" class="conn-label">connecting</span>
+        </div>
+        <button id="fileToggleBtn" class="icon-btn" title="File Browser">📁</button>
         <button id="vncToggleBtn" class="icon-btn" title="Toggle VNC View">🖥️</button>
         <button id="interruptBtn" class="icon-btn" style="display: none;">⏸</button>
+      </div>
+
+      <!-- System Status Bar (tap to expand) -->
+      <div id="statusBar" class="status-bar">
+        <span id="statusGit" class="sb-item" title="Git status">⎇ —</span>
+        <span id="statusLoad" class="sb-item" title="CPU load">⚡ —</span>
+        <span id="statusMem" class="sb-item" title="Memory">🧠 —</span>
+        <span id="statusQueries" class="sb-item" title="Active queries">▶ 0</span>
+        <span id="statusUptime" class="sb-item" title="Server uptime">⏱ —</span>
+        <span class="sb-expand-hint">⋯</span>
+      </div>
+      <!-- Expanded status detail panel -->
+      <div id="statusExpanded" class="status-expanded">
+        <div class="se-row">
+          <span class="se-icon">⎇</span>
+          <div class="se-info">
+            <span class="se-label">Git Branch</span>
+            <span id="seGit" class="se-value">—</span>
+          </div>
+        </div>
+        <div class="se-row">
+          <span class="se-icon">⚡</span>
+          <div class="se-info">
+            <span class="se-label">CPU Load Average</span>
+            <span id="seLoad" class="se-value">—</span>
+          </div>
+        </div>
+        <div class="se-row">
+          <span class="se-icon">🧠</span>
+          <div class="se-info">
+            <span class="se-label">Memory Usage</span>
+            <span id="seMem" class="se-value">—</span>
+          </div>
+        </div>
+        <div class="se-row">
+          <span class="se-icon">▶</span>
+          <div class="se-info">
+            <span class="se-label">Active Claude Queries</span>
+            <span id="seQueries" class="se-value">0</span>
+          </div>
+        </div>
+        <div class="se-row">
+          <span class="se-icon">💾</span>
+          <div class="se-info">
+            <span class="se-label">Data Directory Size</span>
+            <span id="seDisk" class="se-value">—</span>
+          </div>
+        </div>
+        <div class="se-row">
+          <span class="se-icon">⏱</span>
+          <div class="se-info">
+            <span class="se-label">Server Uptime</span>
+            <span id="seUptime" class="se-value">—</span>
+          </div>
+        </div>
       </div>
 
       <!-- Messages -->
@@ -100,6 +160,37 @@
     </div>
     <!-- Resize handle -->
     <div class="vnc-resize-handle"></div>
+  </div>
+
+  <!-- File Viewer/Editor Modal -->
+  <div id="fileViewerModal" class="fv-modal" style="display: none;">
+    <div class="fv-header">
+      <span id="fvFileName" class="fv-filename">file.txt</span>
+      <div class="fv-header-actions">
+        <span id="fvStatus" class="fv-status"></span>
+        <button id="fvSaveBtn" class="fv-btn fv-save-btn" style="display: none;" title="Save">💾 Save</button>
+        <button id="fvCloseBtn" class="fv-btn" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="fvBody" class="fv-body">
+      <!-- Content dynamically inserted: textarea, img, video, or info -->
+    </div>
+  </div>
+
+  <!-- File Browser Panel -->
+  <div id="filePanel" class="file-panel" style="display: none;">
+    <div class="file-panel-header">
+      <span class="file-panel-title">📁 Files</span>
+      <div class="file-panel-actions">
+        <label class="file-upload-label" title="Upload files">
+          ⬆
+          <input type="file" id="fileUploadInput" multiple hidden>
+        </label>
+        <button id="filePanelClose" class="vnc-btn" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="fileBreadcrumb" class="file-breadcrumb"></div>
+    <div id="fileList" class="file-list"></div>
   </div>
 
   <script src="/app.js"></script>

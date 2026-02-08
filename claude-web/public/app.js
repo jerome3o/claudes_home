@@ -58,6 +58,12 @@ let isConnected = false;
 let isSending = false;
 let sendingTimeout = null;
 let pendingImages = []; // Array of { data: base64, mediaType: string }
+let unreadCounts = {}; // { sessionId: number } — unread message counts per session
+let serverRestarting = false; // true when WS disconnects during an active query
+let reconnectAttempts = 0; // For exponential backoff
+let selectSessionSeq = 0; // Batch 3: sequence counter for race condition prevention
+let lastPingTime = null; // Track last server ping
+let activeMsgStatus = null; // Current message status element (for ack/working/done)
 
 // DOM elements
 const sidebar = document.getElementById('sidebar');
@@ -87,6 +93,38 @@ const attachBtn = document.getElementById('attachBtn');
 const imageInput = document.getElementById('imageInput');
 const imagePreview = document.getElementById('imagePreview');
 const refreshAppBtn = document.getElementById('refreshAppBtn');
+const connDot = document.getElementById('connDot');
+const connLabel = document.getElementById('connLabel');
+
+// ============================
+// Connection Status
+// ============================
+
+function updateConnectionStatus(state, detail = '') {
+  // state: 'connected', 'disconnected', 'connecting', 'querying'
+  connDot.className = 'conn-dot';
+  if (state === 'connected') {
+    connDot.classList.add('connected');
+    const pingAge = lastPingTime ? Math.round((Date.now() - lastPingTime) / 1000) : null;
+    connLabel.textContent = detail || (pingAge !== null ? `ok · ${pingAge}s` : 'connected');
+  } else if (state === 'disconnected') {
+    connDot.classList.add('disconnected');
+    connLabel.textContent = detail || 'offline';
+  } else if (state === 'connecting') {
+    connDot.classList.add('connecting');
+    connLabel.textContent = detail || 'connecting';
+  } else if (state === 'querying') {
+    connDot.classList.add('connected');
+    connLabel.textContent = detail || 'query running';
+  }
+}
+
+// Refresh connection status label periodically (show ping age)
+setInterval(() => {
+  if (isConnected && !isSending) {
+    updateConnectionStatus('connected');
+  }
+}, 10_000);
 
 // Initialize
 init();
@@ -96,8 +134,13 @@ async function init() {
   connectWebSocket();
   await loadSessions();
 
-  // Create or load first session
-  if (sessions.length === 0) {
+  // Restore session after refresh if available
+  const restoreId = sessionStorage.getItem('claude_restore_session');
+  sessionStorage.removeItem('claude_restore_session');
+
+  if (restoreId && sessions.find(s => s.id === restoreId)) {
+    selectSession(restoreId);
+  } else if (sessions.length === 0) {
     await createSession('New Session');
   } else {
     selectSession(sessions[0].id);
@@ -161,14 +204,58 @@ function connectWebSocket() {
 
   ws = new WebSocket(wsUrl);
 
-  ws.onopen = () => {
+  ws.onopen = async () => {
     console.log('WebSocket connected');
+    const wasReconnect = reconnectAttempts > 0;
+    const wasSending = isSending;
     isConnected = true;
+    reconnectAttempts = 0; // Reset backoff on successful connect
+    lastPingTime = Date.now();
+    updateConnectionStatus('connected');
 
-    // Reset UI state on reconnection
-    isSending = false;
-    sendBtn.disabled = false;
-    interruptBtn.style.display = 'none';
+    // On any reconnect (not first connect), sync state with server
+    if (wasReconnect && currentSessionId) {
+      serverRestarting = false;
+      if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null; }
+
+      try {
+        const statusRes = await fetch(`/api/sessions/${currentSessionId}/status`);
+        const status = await statusRes.json();
+
+        if (status.activeQuery) {
+          // Query still running on server — show interrupt button
+          console.log('Query still active on server after reconnect');
+          isSending = true;
+          sendBtn.disabled = true;
+          interruptBtn.style.display = 'block';
+          updateConnectionStatus('querying');
+          showToast('Reconnected — query still running', 3000);
+        } else {
+          // Query finished (or never started) — reset to idle, reload history
+          isSending = false;
+          sendBtn.disabled = false;
+          interruptBtn.style.display = 'none';
+          clearMsgStatus();
+
+          if (wasSending) {
+            // We were mid-query when disconnected, and it's now done
+            showToast('Reconnected — loading latest messages', 3000);
+          }
+
+          // Always reload history on reconnect to catch messages we missed
+          messages.innerHTML = '';
+          await loadSessionHistory(currentSessionId);
+        }
+      } catch (e) {
+        console.warn('Failed to check session status:', e);
+        // Fallback: reload history anyway, reset to idle
+        isSending = false;
+        sendBtn.disabled = false;
+        interruptBtn.style.display = 'none';
+        messages.innerHTML = '';
+        await loadSessionHistory(currentSessionId);
+      }
+    }
 
     // Start current session if one is selected
     if (currentSessionId) {
@@ -184,9 +271,24 @@ function connectWebSocket() {
   ws.onclose = () => {
     console.log('WebSocket disconnected');
     isConnected = false;
+    updateConnectionStatus('disconnected');
 
-    // Reconnect after delay
-    setTimeout(connectWebSocket, 3000);
+    // If we were actively sending, the query was interrupted by a server restart
+    if (isSending) {
+      serverRestarting = true;
+      if (sendingTimeout) { clearTimeout(sendingTimeout); sendingTimeout = null; }
+      addMessage('system', 'Server disconnected — reconnecting...', 'error');
+      clearMsgStatus();
+    }
+
+    // Exponential backoff with jitter: 1s, 2s, 4s, 8s, 16s, 30s max
+    reconnectAttempts++;
+    const baseDelay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+    const jitter = baseDelay * 0.3 * (Math.random() * 2 - 1); // ±30%
+    const delay = Math.round(baseDelay + jitter);
+    console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+    updateConnectionStatus('connecting', `retry ${reconnectAttempts}`);
+    setTimeout(connectWebSocket, delay);
   };
 
   ws.onerror = (error) => {
@@ -194,12 +296,66 @@ function connectWebSocket() {
   };
 }
 
+// ============================
+// Message Status (send ack, working, done)
+// ============================
+
+function showMsgStatus(text, state = 'sent') {
+  // Remove previous status if any
+  clearMsgStatus();
+
+  const el = document.createElement('div');
+  el.className = `msg-status ${state}`;
+  if (state === 'working') {
+    el.innerHTML = `<span class="status-spinner"></span> ${escapeHtml(text)}`;
+  } else {
+    el.textContent = text;
+  }
+  messages.appendChild(el);
+  scrollToBottom();
+  activeMsgStatus = el;
+  return el;
+}
+
+function updateMsgStatus(text, state = 'working') {
+  if (activeMsgStatus) {
+    activeMsgStatus.className = `msg-status ${state}`;
+    if (state === 'working') {
+      activeMsgStatus.innerHTML = `<span class="status-spinner"></span> ${escapeHtml(text)}`;
+    } else {
+      activeMsgStatus.textContent = text;
+    }
+  }
+}
+
+function clearMsgStatus() {
+  if (activeMsgStatus) {
+    activeMsgStatus.remove();
+    activeMsgStatus = null;
+  }
+}
+
 function handleServerMessage(data) {
   console.log('Server message:', data);
+
+  // Ignore messages from other sessions (prevents leaking)
+  // BUT allow session_notification through — those are meant for cross-session display
+  if (data.sessionId && data.sessionId !== currentSessionId && data.type !== 'session_notification') {
+    console.log('Ignoring message for different session:', data.sessionId);
+    return;
+  }
 
   switch (data.type) {
     case 'session_started':
       console.log('Session started:', data.sessionId);
+      // Sync query status from server (e.g., after reconnect)
+      if (data.activeQuery && !isSending) {
+        isSending = true;
+        sendBtn.disabled = true;
+        interruptBtn.style.display = 'block';
+        updateConnectionStatus('querying');
+        showMsgStatus('Query running...', 'working');
+      }
       break;
 
     case 'sdk_event':
@@ -214,6 +370,8 @@ function handleServerMessage(data) {
       isSending = false;
       sendBtn.disabled = false;
       interruptBtn.style.display = 'none';
+      updateConnectionStatus('connected');
+      clearMsgStatus();
       break;
 
     case 'interrupted':
@@ -224,6 +382,8 @@ function handleServerMessage(data) {
       isSending = false;
       sendBtn.disabled = false;
       interruptBtn.style.display = 'none';
+      updateConnectionStatus('connected');
+      clearMsgStatus();
       addMessage('system', 'Query interrupted');
       break;
 
@@ -235,11 +395,17 @@ function handleServerMessage(data) {
       isSending = false;
       sendBtn.disabled = false;
       interruptBtn.style.display = 'none';
+      updateConnectionStatus('connected');
+      clearMsgStatus();
       addMessage('system', `Error: ${data.error}`, 'error');
       break;
 
     case 'mcp_servers_updated':
       addMessage('system', 'MCP servers updated successfully', 'success');
+      break;
+
+    case 'session_notification':
+      handleSessionNotification(data);
       break;
   }
 }
@@ -253,14 +419,15 @@ function handleSdkEvent(event) {
       break;
 
     case 'assistant':
+      // First assistant message = Claude is responding, clear "Starting Claude..."
+      clearMsgStatus();
+      updateConnectionStatus('querying', 'responding');
       handleAssistantMessage(event);
       break;
 
     case 'user':
-      if (!event.isSynthetic) {
-        // Skip synthetic user messages (tool results)
-        addMessage('user', extractContent(event.message));
-      }
+      // User messages are already shown in the UI when sent and saved server-side.
+      // Skip all user echoes from the SDK to prevent duplicates.
       break;
 
     case 'result':
@@ -269,6 +436,7 @@ function handleSdkEvent(event) {
 
     case 'tool_progress':
       updateToolProgress(event);
+      updateConnectionStatus('querying', `tool: ${event.tool_name}`);
       break;
   }
 }
@@ -278,21 +446,23 @@ function handleSystemEvent(event) {
     // Store SDK session ID for resumption
     currentSdkSessionId = event.session_id;
 
-    // Show MCP server status
+    // Show compact MCP server status bar
     if (event.mcp_servers && event.mcp_servers.length > 0) {
-      const statusHtml = event.mcp_servers
-        .map(server => `
-          <div class="status-indicator">
-            <span class="status-dot ${server.status === 'connected' ? '' : 'error'}"></span>
-            <span>${server.name}: ${server.status}</span>
-          </div>
-        `)
-        .join('');
+      const statusHtml = '<div class="mcp-status-bar">' +
+        event.mcp_servers.map(server => {
+          const dotClass = server.status === 'connected' ? '' : (server.status === 'connecting' ? 'pending' : 'error');
+          return `<span class="mcp-status-item"><span class="status-dot ${dotClass}"></span>${escapeHtml(server.name)}</span>`;
+        }).join('') +
+        '</div>';
       addSystemMessage(statusHtml);
     }
+
+    // Update status: Claude is initializing
+    updateMsgStatus('Starting Claude...', 'working');
+    updateConnectionStatus('querying', 'initializing');
   } else if (event.subtype === 'status') {
     if (event.status === 'compacting') {
-      addSystemMessage('Compacting conversation context...');
+      updateMsgStatus('Compacting context...', 'working');
     }
   }
 }
@@ -311,11 +481,7 @@ function handleAssistantMessage(event) {
 
 function handleResultMessage(event) {
   if (event.subtype === 'success') {
-    const stats = `
-      Turns: ${event.num_turns} |
-      Cost: $${event.total_cost_usd.toFixed(4)} |
-      Tokens: ${event.usage.input_tokens}/${event.usage.output_tokens}
-    `;
+    const stats = `<span style="font-size:0.7rem;color:var(--text-tertiary)">${event.num_turns} turns · $${event.total_cost_usd.toFixed(4)} · ${event.usage.input_tokens}↓ ${event.usage.output_tokens}↑</span>`;
     addSystemMessage(stats);
   } else if (event.subtype.startsWith('error_')) {
     const errorMsg = event.errors.join('\n');
@@ -426,23 +592,77 @@ function renderSessions() {
       minute: '2-digit'
     });
 
+    const unread = unreadCounts[session.id] || 0;
+    const unreadBadge = unread > 0
+      ? `<span class="session-unread-badge">${unread > 9 ? '9+' : unread}</span>`
+      : '';
+    const unreadClass = unread > 0 ? ' has-unread' : '';
+
     return `
-      <div class="session-item ${session.id === currentSessionId ? 'active' : ''}"
+      <div class="session-item ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
            data-id="${session.id}">
-        <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-time">${timeStr}</div>
+        <div class="session-item-content">
+          <div class="session-name">${escapeHtml(session.name)}${unreadBadge}</div>
+          <div class="session-time">${timeStr}</div>
+        </div>
+        <div class="session-actions">
+          <button class="session-action-btn session-rename-btn" data-id="${session.id}" title="Rename">✏️</button>
+          <button class="session-action-btn session-delete-btn" data-id="${session.id}" title="Delete">✕</button>
+        </div>
       </div>
     `;
   }).join('');
 
-  // Add click listeners
+  // Add click listeners for selecting sessions
   document.querySelectorAll('.session-item').forEach(item => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.session-action-btn')) return;
       const id = item.dataset.id;
       selectSession(id);
       sidebar.classList.remove('open');
     });
   });
+
+  // Rename buttons
+  document.querySelectorAll('.session-rename-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renameSession(btn.dataset.id);
+    });
+  });
+
+  // Delete buttons
+  document.querySelectorAll('.session-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const session = sessions.find(s => s.id === id);
+      if (!session) return;
+      if (!confirm(`Delete "${session.name}"?`)) return;
+      await deleteSession(id);
+    });
+  });
+}
+
+async function deleteSession(sessionId) {
+  try {
+    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    sessions = sessions.filter(s => s.id !== sessionId);
+
+    // If we deleted the current session, switch to another or create new
+    if (sessionId === currentSessionId) {
+      if (sessions.length > 0) {
+        selectSession(sessions[0].id);
+      } else {
+        await createSession('New Session');
+      }
+    }
+
+    renderSessions();
+  } catch (error) {
+    console.error('Failed to delete session:', error);
+    alert('Failed to delete session: ' + error.message);
+  }
 }
 
 async function createSession(name, folder = null) {
@@ -463,8 +683,24 @@ async function createSession(name, folder = null) {
 }
 
 async function selectSession(sessionId) {
+  // Batch 3: increment sequence counter to prevent race conditions
+  const seq = ++selectSessionSeq;
+
   currentSessionId = sessionId;
   currentSdkSessionId = null; // Will be loaded from server
+
+  // Clear unread for this session
+  delete unreadCounts[sessionId];
+  updateUnreadBadge();
+
+  // Reset sending state when switching sessions
+  if (sendingTimeout) {
+    clearTimeout(sendingTimeout);
+    sendingTimeout = null;
+  }
+  isSending = false;
+  sendBtn.disabled = false;
+  interruptBtn.style.display = 'none';
 
   const session = sessions.find(s => s.id === sessionId);
   if (session) {
@@ -474,22 +710,28 @@ async function selectSession(sessionId) {
   // Clear messages
   messages.innerHTML = '';
 
-  // Load message history
-  await loadSessionHistory(sessionId);
+  // Load message history (pass sequence counter for race detection)
+  await loadSessionHistory(sessionId, seq);
 
   // Re-render session list to update active state
   renderSessions();
 
-  // Start session with server
+  // Start session with server (re-routes WS connection to this session)
   if (isConnected) {
     startSession(sessionId);
   }
 }
 
-async function loadSessionHistory(sessionId) {
+async function loadSessionHistory(sessionId, seq = null) {
   try {
     const response = await fetch(`/api/sessions/${sessionId}/messages`);
     const data = await response.json();
+
+    // Batch 3: bail if the user switched sessions while we were fetching
+    if (seq !== null && seq !== selectSessionSeq) {
+      console.log('Stale session history response — user switched sessions');
+      return;
+    }
 
     // Restore SDK session ID for resumption
     if (data.sdkSessionId) {
@@ -534,6 +776,15 @@ function sendMessage() {
     addMessage('system', 'Query timed out after 5 minutes', 'error');
   }, 5 * 60 * 1000);
 
+  // Batch 4: Pre-save user message via REST (fire-and-forget — survives WS drop)
+  if (text) {
+    fetch(`/api/sessions/${currentSessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text, timestamp: Date.now() }),
+    }).catch(e => console.warn('Pre-save failed (will be saved via WS):', e));
+  }
+
   // Add user message to UI (with image thumbnails if present)
   let displayContent = text || '';
   if (hasImages) {
@@ -563,6 +814,10 @@ function sendMessage() {
   }
 
   send(payload);
+
+  // Show send acknowledgment
+  showMsgStatus('Sent ✓', 'sent');
+  updateConnectionStatus('querying', 'sending');
 
   // Clear input and images
   messageInput.value = '';
@@ -645,6 +900,102 @@ function scrollToBottom() {
   requestAnimationFrame(() => {
     messages.scrollTop = messages.scrollHeight;
   });
+}
+
+// ============================
+// Toast Notifications
+// ============================
+
+function showToast(message, duration = 4000, onClick = null) {
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification';
+  toast.textContent = message;
+  if (onClick) {
+    toast.style.cursor = 'pointer';
+    toast.addEventListener('click', () => {
+      onClick();
+      toast.remove();
+    });
+  }
+  document.body.appendChild(toast);
+
+  // Trigger animation
+  requestAnimationFrame(() => toast.classList.add('show'));
+
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// ============================
+// Session Notifications (cross-session)
+// ============================
+
+function handleSessionNotification(data) {
+  // Don't show toast for the session we're currently viewing
+  if (data.sessionId === currentSessionId) return;
+
+  if (data.notification === 'completed') {
+    // Increment unread count for that session
+    unreadCounts[data.sessionId] = (unreadCounts[data.sessionId] || 0) + 1;
+    updateUnreadBadge();
+    renderSessions();
+
+    showToast(`"${data.sessionName}" finished`, 5000, () => {
+      selectSession(data.sessionId);
+      sidebar.classList.remove('open');
+    });
+  }
+}
+
+function updateUnreadBadge() {
+  const totalUnread = Object.values(unreadCounts).reduce((sum, c) => sum + c, 0);
+  let badge = document.getElementById('menuBadge');
+
+  if (totalUnread > 0) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'menuBadge';
+      badge.className = 'menu-badge';
+      menuBtn.style.position = 'relative';
+      menuBtn.appendChild(badge);
+    }
+    badge.textContent = totalUnread > 9 ? '9+' : String(totalUnread);
+    badge.style.display = 'flex';
+  } else if (badge) {
+    badge.style.display = 'none';
+  }
+}
+
+// ============================
+// Session Rename
+// ============================
+
+async function renameSession(sessionId) {
+  const session = sessions.find(s => s.id === sessionId);
+  if (!session) return;
+
+  const newName = prompt('Rename session:', session.name);
+  if (!newName || newName === session.name) return;
+
+  try {
+    const response = await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+
+    if (response.ok) {
+      session.name = newName;
+      renderSessions();
+      if (sessionId === currentSessionId) {
+        sessionTitle.textContent = newName;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to rename session:', error);
+  }
 }
 
 // ============================
@@ -732,17 +1083,36 @@ async function refreshApp() {
   refreshAppBtn.textContent = '⏳ Refreshing...';
 
   try {
-    // Unregister all service workers
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map(r => r.unregister()));
-    }
-
     // Clear all caches
     const keys = await caches.keys();
     await Promise.all(keys.map(k => caches.delete(k)));
 
-    // Hard reload
+    // Update service worker (don't unregister — just trigger update check)
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+    }
+
+    // Cache-bust reload CSS in place (no page reload needed)
+    const bust = '?v=' + Date.now();
+    const oldLink = document.querySelector('link[rel="stylesheet"]');
+    if (oldLink) {
+      const newLink = document.createElement('link');
+      newLink.rel = 'stylesheet';
+      newLink.href = '/styles.css' + bust;
+      newLink.onload = () => oldLink.remove();
+      oldLink.parentNode.insertBefore(newLink, oldLink.nextSibling);
+    }
+
+    // Reload the page JS by re-fetching app.js with cache bust
+    // We need a full reload for JS — but we'll use a soft approach:
+    // Store current session so we can restore it after reload
+    const currentSess = currentSessionId;
+    if (currentSess) {
+      sessionStorage.setItem('claude_restore_session', currentSess);
+    }
+
+    // Use standard reload — the caches are already cleared so it'll fetch fresh
     window.location.reload();
   } catch (err) {
     console.error('Refresh failed:', err);
@@ -1127,4 +1497,638 @@ const isStandalone = window.matchMedia('(display-mode: standalone)').matches
 
 if (isStandalone) {
   document.documentElement.classList.add('pwa-standalone');
+}
+
+// ============================
+// System Status Bar
+// ============================
+
+const statusGit = document.getElementById('statusGit');
+const statusLoad = document.getElementById('statusLoad');
+const statusMem = document.getElementById('statusMem');
+const statusQueries = document.getElementById('statusQueries');
+const statusUptime = document.getElementById('statusUptime');
+
+let statusInterval = null;
+let statusExpanded = false;
+const statusExpandedEl = document.getElementById('statusExpanded');
+const statusBarEl = document.getElementById('statusBar');
+
+// Tap to toggle expanded panel
+statusBarEl.addEventListener('click', () => {
+  statusExpanded = !statusExpanded;
+  statusExpandedEl.classList.toggle('open', statusExpanded);
+  statusBarEl.classList.toggle('expanded', statusExpanded);
+});
+
+// Close expanded panel when tapping outside
+document.addEventListener('click', (e) => {
+  if (statusExpanded && !e.target.closest('.status-bar') && !e.target.closest('.status-expanded')) {
+    statusExpanded = false;
+    statusExpandedEl.classList.remove('open');
+    statusBarEl.classList.remove('expanded');
+  }
+});
+
+async function fetchSystemStatus() {
+  try {
+    const res = await fetch('/api/system-status');
+    if (!res.ok) return;
+    const s = await res.json();
+
+    // --- Compact bar values ---
+
+    const dirty = s.git?.dirty ?? 0;
+    const untracked = s.git?.untracked ?? 0;
+    const changes = dirty + untracked;
+    const branch = s.git?.branch ?? '';
+    const loadArr = Array.isArray(s.load) ? s.load : [];
+    const load1 = loadArr[0];
+    const usedMB = s.mem?.used;
+    const totalMB = s.mem?.total;
+    const q = s.queries ?? 0;
+    const secs = s.uptime;
+
+    // Git
+    if (statusGit) {
+      statusGit.textContent = `⎇ ${branch}${changes > 0 ? ` +${changes}` : ''}`;
+    }
+
+    // CPU load
+    if (statusLoad) {
+      statusLoad.textContent = `⚡ ${typeof load1 === 'number' ? load1.toFixed(1) : '—'}`;
+    }
+
+    // Memory
+    if (statusMem && usedMB != null && totalMB != null && totalMB > 0) {
+      const pct = Math.round((usedMB / totalMB) * 100);
+      statusMem.textContent = `🧠 ${pct}%`;
+    }
+
+    // Active queries
+    if (statusQueries) {
+      statusQueries.textContent = `▶ ${q}`;
+    }
+
+    // Uptime
+    let uptimeStr = '—';
+    if (secs != null) {
+      if (secs < 3600) uptimeStr = Math.round(secs / 60) + 'm';
+      else if (secs < 86400) uptimeStr = (secs / 3600).toFixed(1) + 'h';
+      else uptimeStr = (secs / 86400).toFixed(1) + 'd';
+    }
+    if (statusUptime) {
+      statusUptime.textContent = `⏱ ${uptimeStr}`;
+    }
+
+    // --- Expanded panel values ---
+
+    const seGit = document.getElementById('seGit');
+    const seLoad = document.getElementById('seLoad');
+    const seMem = document.getElementById('seMem');
+    const seQueries = document.getElementById('seQueries');
+    const seDisk = document.getElementById('seDisk');
+    const seUptime = document.getElementById('seUptime');
+
+    if (seGit) {
+      let gitDetail = branch || 'unknown';
+      if (changes > 0) gitDetail += ` — ${dirty} modified, ${untracked} untracked`;
+      else gitDetail += ' — clean';
+      seGit.textContent = gitDetail;
+    }
+
+    if (seLoad) {
+      const l1 = loadArr[0]?.toFixed(2) ?? '—';
+      const l5 = loadArr[1]?.toFixed(2) ?? '—';
+      const l15 = loadArr[2]?.toFixed(2) ?? '—';
+      seLoad.textContent = `${l1} / ${l5} / ${l15}  (1m / 5m / 15m)`;
+    }
+
+    if (seMem) {
+      if (usedMB != null && totalMB != null && totalMB > 0) {
+        const pct = Math.round((usedMB / totalMB) * 100);
+        seMem.textContent = `${Math.round(usedMB)} MB / ${Math.round(totalMB)} MB  (${pct}%)`;
+      }
+    }
+
+    if (seQueries) {
+      seQueries.textContent = q === 0 ? 'None' : `${q} running`;
+    }
+
+    if (seDisk) {
+      seDisk.textContent = s.diskUsage || '—';
+    }
+
+    if (seUptime) {
+      if (secs != null) {
+        const days = Math.floor(secs / 86400);
+        const hrs = Math.floor((secs % 86400) / 3600);
+        const mins = Math.floor((secs % 3600) / 60);
+        const parts = [];
+        if (days > 0) parts.push(`${days}d`);
+        if (hrs > 0) parts.push(`${hrs}h`);
+        parts.push(`${mins}m`);
+        seUptime.textContent = parts.join(' ');
+      }
+    }
+  } catch (e) {
+    // Silently fail — status bar just shows stale data
+  }
+}
+
+// Poll every 15 seconds
+fetchSystemStatus();
+statusInterval = setInterval(fetchSystemStatus, 15000);
+
+// ============================
+// File Browser Panel
+// ============================
+
+const filePanel = document.getElementById('filePanel');
+const fileToggleBtn = document.getElementById('fileToggleBtn');
+const filePanelClose = document.getElementById('filePanelClose');
+const fileBreadcrumb = document.getElementById('fileBreadcrumb');
+const fileListEl = document.getElementById('fileList');
+const fileUploadInput = document.getElementById('fileUploadInput');
+
+let fileBrowserPath = '.'; // Relative to FILE_ROOT on server
+let fileBrowserOpen = false;
+
+// Toggle file panel
+fileToggleBtn.addEventListener('click', () => {
+  if (fileBrowserOpen) {
+    closeFilePanel();
+  } else {
+    openFilePanel();
+  }
+});
+
+filePanelClose.addEventListener('click', closeFilePanel);
+
+function openFilePanel() {
+  fileBrowserOpen = true;
+  filePanel.style.display = 'flex';
+  loadDirectory(fileBrowserPath);
+}
+
+function closeFilePanel() {
+  fileBrowserOpen = false;
+  filePanel.style.display = 'none';
+}
+
+async function loadDirectory(path) {
+  fileBrowserPath = path;
+  fileListEl.innerHTML = '<div class="file-loading">Loading...</div>';
+  renderBreadcrumb(path);
+
+  try {
+    const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      fileListEl.innerHTML = `<div class="file-empty">Error: ${err.error || res.statusText}</div>`;
+      return;
+    }
+    const data = await res.json();
+    renderFileList(data.entries || []);
+  } catch (e) {
+    fileListEl.innerHTML = `<div class="file-empty">Failed to load: ${e.message}</div>`;
+  }
+}
+
+function renderBreadcrumb(path) {
+  // Split path into segments
+  const parts = path === '.' ? ['~'] : ['~', ...path.split('/').filter(Boolean)];
+  const pathParts = path === '.' ? ['.'] : ['.'];
+
+  // Build cumulative paths
+  if (path !== '.') {
+    const segs = path.split('/').filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+      pathParts.push(segs.slice(0, i + 1).join('/'));
+    }
+  }
+
+  fileBreadcrumb.innerHTML = parts.map((part, i) => {
+    const isLast = i === parts.length - 1;
+    const sep = i > 0 ? '<span class="breadcrumb-sep">›</span>' : '';
+    const cls = isLast ? 'breadcrumb-item current' : 'breadcrumb-item';
+    return `${sep}<span class="${cls}" data-path="${pathParts[i]}">${escapeHtml(part)}</span>`;
+  }).join('');
+
+  // Click handlers for breadcrumb navigation
+  fileBreadcrumb.querySelectorAll('.breadcrumb-item:not(.current)').forEach(el => {
+    el.addEventListener('click', () => loadDirectory(el.dataset.path));
+  });
+}
+
+function renderFileList(entries) {
+  if (entries.length === 0) {
+    fileListEl.innerHTML = '<div class="file-empty">Empty directory</div>';
+    return;
+  }
+
+  // Sort: directories first, then by name
+  entries.sort((a, b) => {
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  fileListEl.innerHTML = entries.map(entry => {
+    const icon = entry.isDir ? '📁' : getFileIcon(entry.name);
+    const size = entry.isDir ? '' : formatFileSize(entry.size);
+    const entryPath = fileBrowserPath === '.' ? entry.name : `${fileBrowserPath}/${entry.name}`;
+
+    let actions = '';
+    if (!entry.isDir) {
+      actions = `
+        <div class="file-item-actions">
+          <button class="file-action-btn download" data-path="${escapeHtml(entryPath)}" title="Download">⬇</button>
+          <button class="file-action-btn delete" data-path="${escapeHtml(entryPath)}" data-name="${escapeHtml(entry.name)}" title="Delete">✕</button>
+        </div>`;
+    }
+
+    return `
+      <div class="file-item" data-path="${escapeHtml(entryPath)}" data-dir="${entry.isDir}">
+        <span class="file-item-icon">${icon}</span>
+        <span class="file-item-name">${escapeHtml(entry.name)}</span>
+        <span class="file-item-size">${size}</span>
+        ${actions}
+      </div>`;
+  }).join('');
+
+  // Click handlers
+  fileListEl.querySelectorAll('.file-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      // Don't navigate if clicking an action button
+      if (e.target.closest('.file-action-btn')) return;
+
+      if (el.dataset.dir === 'true') {
+        loadDirectory(el.dataset.path);
+      } else {
+        // Open file in viewer/editor
+        openFileViewer(el.dataset.path);
+      }
+    });
+  });
+
+  // Download buttons
+  fileListEl.querySelectorAll('.file-action-btn.download').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadFile(btn.dataset.path);
+    });
+  });
+
+  // Delete buttons
+  fileListEl.querySelectorAll('.file-action-btn.delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteFile(btn.dataset.path, btn.dataset.name);
+    });
+  });
+}
+
+function downloadFile(path) {
+  const url = `/api/files/download?path=${encodeURIComponent(path)}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = path.split('/').pop();
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function deleteFile(path, name) {
+  if (!confirm(`Delete "${name}"?`)) return;
+
+  try {
+    const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+    if (res.ok) {
+      // Reload current directory
+      loadDirectory(fileBrowserPath);
+      showToast(`Deleted ${name}`, 2000);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(`Delete failed: ${err.error || 'Unknown error'}`, 3000);
+    }
+  } catch (e) {
+    showToast(`Delete failed: ${e.message}`, 3000);
+  }
+}
+
+// File upload
+fileUploadInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  const formData = new FormData();
+  formData.append('path', fileBrowserPath);
+  files.forEach(f => formData.append('files', f));
+
+  try {
+    showToast(`Uploading ${files.length} file(s)...`, 2000);
+    const res = await fetch('/api/files/upload', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      showToast(`Uploaded ${data.count} file(s)`, 3000);
+      loadDirectory(fileBrowserPath);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(`Upload failed: ${err.error || 'Unknown error'}`, 3000);
+    }
+  } catch (err) {
+    showToast(`Upload failed: ${err.message}`, 3000);
+  }
+
+  // Reset input
+  e.target.value = '';
+});
+
+// ============================
+// File Viewer / Editor
+// ============================
+
+const fvModal = document.getElementById('fileViewerModal');
+const fvFileName = document.getElementById('fvFileName');
+const fvBody = document.getElementById('fvBody');
+const fvSaveBtn = document.getElementById('fvSaveBtn');
+const fvCloseBtn = document.getElementById('fvCloseBtn');
+const fvStatus = document.getElementById('fvStatus');
+
+let fvCurrentPath = null;
+let fvOriginalContent = null;
+let fvModified = false;
+
+fvCloseBtn.addEventListener('click', closeFileViewer);
+fvSaveBtn.addEventListener('click', saveFileContent);
+
+// Keyboard shortcut: Ctrl/Cmd+S to save
+document.addEventListener('keydown', (e) => {
+  if (fvModal.style.display !== 'none' && (e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    if (fvModified) saveFileContent();
+  }
+});
+
+function openFileViewer(path) {
+  fvCurrentPath = path;
+  fvModified = false;
+  fvOriginalContent = null;
+  const name = path.split('/').pop();
+  fvFileName.textContent = name;
+  fvStatus.textContent = '';
+  fvStatus.className = 'fv-status';
+  fvSaveBtn.style.display = 'none';
+  fvBody.innerHTML = '<div class="fv-info"><span class="fv-info-text">Loading...</span></div>';
+  fvModal.style.display = 'flex';
+
+  loadFileContent(path);
+}
+
+function closeFileViewer() {
+  if (fvModified) {
+    if (!confirm('You have unsaved changes. Close anyway?')) return;
+  }
+  fvModal.style.display = 'none';
+  fvBody.innerHTML = '';
+  fvCurrentPath = null;
+  fvOriginalContent = null;
+  fvModified = false;
+}
+
+async function loadFileContent(path) {
+  try {
+    const res = await fetch(`/api/files/read?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      fvBody.innerHTML = `<div class="fv-info"><span class="fv-info-icon">❌</span><span class="fv-info-text">${escapeHtml(err.error || 'Failed to load file')}</span></div>`;
+      return;
+    }
+
+    const data = await res.json();
+    const ext = path.split('.').pop().toLowerCase();
+
+    switch (data.type) {
+      case 'text':
+        renderTextEditor(data.content, data.size, ext);
+        break;
+      case 'image':
+        renderImageViewer(path, data.size);
+        break;
+      case 'video':
+        renderVideoViewer(path, data.mime, data.size);
+        break;
+      case 'audio':
+        renderAudioViewer(path, data.size);
+        break;
+      case 'binary':
+      default:
+        renderBinaryInfo(data.size, data.reason);
+        break;
+    }
+  } catch (e) {
+    fvBody.innerHTML = `<div class="fv-info"><span class="fv-info-icon">❌</span><span class="fv-info-text">${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+function renderTextEditor(content, size, ext) {
+  fvOriginalContent = content;
+  fvSaveBtn.style.display = 'flex';
+  fvSaveBtn.disabled = true;
+
+  const lines = content.split('\n').length;
+  fvStatus.textContent = `${lines} lines · ${formatFileSize(size)}`;
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'fv-editor';
+  textarea.value = content;
+  textarea.spellcheck = false;
+  textarea.autocapitalize = 'off';
+  textarea.autocomplete = 'off';
+
+  // Handle tab key for indentation
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      textarea.value = textarea.value.substring(0, start) + '  ' + textarea.value.substring(end);
+      textarea.selectionStart = textarea.selectionEnd = start + 2;
+      markModified();
+    }
+  });
+
+  // Track modifications
+  textarea.addEventListener('input', () => {
+    const isChanged = textarea.value !== fvOriginalContent;
+    if (isChanged && !fvModified) {
+      markModified();
+    } else if (!isChanged && fvModified) {
+      fvModified = false;
+      fvSaveBtn.disabled = true;
+      fvStatus.textContent = `${textarea.value.split('\n').length} lines · ${formatFileSize(size)}`;
+      fvStatus.className = 'fv-status';
+    }
+  });
+
+  fvBody.innerHTML = '';
+  fvBody.appendChild(textarea);
+  textarea.focus();
+}
+
+function markModified() {
+  fvModified = true;
+  fvSaveBtn.disabled = false;
+  fvStatus.textContent = 'Modified';
+  fvStatus.className = 'fv-status modified';
+}
+
+async function saveFileContent() {
+  const textarea = fvBody.querySelector('.fv-editor');
+  if (!textarea || !fvCurrentPath) return;
+
+  fvSaveBtn.disabled = true;
+  fvStatus.textContent = 'Saving...';
+  fvStatus.className = 'fv-status';
+
+  try {
+    const res = await fetch('/api/files/write', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fvCurrentPath, content: textarea.value }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      fvOriginalContent = textarea.value;
+      fvModified = false;
+      fvSaveBtn.disabled = true;
+      const lines = textarea.value.split('\n').length;
+      fvStatus.textContent = `Saved · ${lines} lines · ${formatFileSize(data.size)}`;
+      fvStatus.className = 'fv-status saved';
+
+      // Reset status text after a moment
+      setTimeout(() => {
+        if (!fvModified && fvModal.style.display !== 'none') {
+          fvStatus.textContent = `${lines} lines · ${formatFileSize(data.size)}`;
+          fvStatus.className = 'fv-status';
+        }
+      }, 2000);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      fvStatus.textContent = `Save failed: ${err.error || 'Unknown error'}`;
+      fvStatus.className = 'fv-status modified';
+      fvSaveBtn.disabled = false;
+    }
+  } catch (e) {
+    fvStatus.textContent = `Save failed: ${e.message}`;
+    fvStatus.className = 'fv-status modified';
+    fvSaveBtn.disabled = false;
+  }
+}
+
+function renderImageViewer(path, size) {
+  fvStatus.textContent = formatFileSize(size);
+
+  const container = document.createElement('div');
+  container.className = 'fv-image-container';
+
+  const img = document.createElement('img');
+  img.className = 'fv-image';
+  img.src = `/api/files/raw?path=${encodeURIComponent(path)}`;
+  img.alt = path.split('/').pop();
+
+  // Click to toggle zoom
+  img.addEventListener('click', () => {
+    img.classList.toggle('zoomed');
+  });
+
+  container.appendChild(img);
+  fvBody.innerHTML = '';
+  fvBody.appendChild(container);
+}
+
+function renderVideoViewer(path, mime, size) {
+  fvStatus.textContent = formatFileSize(size);
+
+  const container = document.createElement('div');
+  container.className = 'fv-video-container';
+
+  const video = document.createElement('video');
+  video.className = 'fv-video';
+  video.controls = true;
+  video.preload = 'metadata';
+
+  const source = document.createElement('source');
+  source.src = `/api/files/raw?path=${encodeURIComponent(path)}`;
+  source.type = mime;
+  video.appendChild(source);
+
+  container.appendChild(video);
+  fvBody.innerHTML = '';
+  fvBody.appendChild(container);
+}
+
+function renderAudioViewer(path, size) {
+  fvStatus.textContent = formatFileSize(size);
+
+  const container = document.createElement('div');
+  container.className = 'fv-audio-container';
+
+  const icon = document.createElement('div');
+  icon.className = 'fv-audio-icon';
+  icon.textContent = '🎵';
+
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.preload = 'metadata';
+  audio.src = `/api/files/raw?path=${encodeURIComponent(path)}`;
+
+  container.appendChild(icon);
+  container.appendChild(audio);
+  fvBody.innerHTML = '';
+  fvBody.appendChild(container);
+}
+
+function renderBinaryInfo(size, reason) {
+  fvBody.innerHTML = `
+    <div class="fv-info">
+      <span class="fv-info-icon">📦</span>
+      <span class="fv-info-text">${reason || 'Binary file — cannot be edited'}</span>
+      <span class="fv-info-size">${formatFileSize(size)}</span>
+      <button class="fv-btn" onclick="downloadFile(fvCurrentPath)" style="margin-top: 0.5rem;">⬇ Download</button>
+    </div>`;
+}
+
+// Helper: file icon by extension
+function getFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const icons = {
+    js: '📜', ts: '📜', jsx: '📜', tsx: '📜', mjs: '📜',
+    json: '📋', yaml: '📋', yml: '📋', toml: '📋',
+    md: '📝', txt: '📝', log: '📝',
+    html: '🌐', css: '🎨', svg: '🎨',
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', ico: '🖼️',
+    pdf: '📄', doc: '📄', docx: '📄',
+    zip: '📦', tar: '📦', gz: '📦', tgz: '📦',
+    sh: '⚙️', bash: '⚙️', zsh: '⚙️',
+    py: '🐍', rb: '💎', go: '🐹', rs: '🦀',
+    sql: '🗃️', db: '🗃️', sqlite: '🗃️',
+    lock: '🔒',
+  };
+  return icons[ext] || '📄';
+}
+
+// Helper: format file size
+function formatFileSize(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
