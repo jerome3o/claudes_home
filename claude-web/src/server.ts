@@ -5,15 +5,16 @@ import { createServer, request as httpRequest } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { Query, SDKMessage, Options as SDKOptions, McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import type { Query, SDKMessage, SDKUserMessage, Options as SDKOptions, McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 }); // 50MB max for image uploads
 
 // Configuration
 const PORT = process.env.PORT || 8080;
@@ -114,6 +115,13 @@ app.use('/vnc', (req, res) => {
   req.pipe(proxyReq, { end: true });
 });
 
+// Service worker: ensure no HTTP caching so browser always checks for updates
+app.get('/service-worker.js', (req, res, next) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Service-Worker-Allowed', '/');
+  next();
+});
+
 // Serve static files
 app.use(express.static(join(__dirname, '../public')));
 app.use(express.json());
@@ -159,6 +167,23 @@ app.post('/api/mcp-config', (req, res) => {
   res.json({ success: true });
 });
 
+// Restart webtop container
+app.post('/api/webtop/restart', (req, res) => {
+  try {
+    console.log('Restarting webtop container...');
+    // Run restart in background so we can respond immediately
+    execSync('docker restart webtop', { timeout: 60000 });
+    console.log('Webtop container restarted successfully');
+    res.json({ success: true, message: 'Webtop container restarted' });
+  } catch (error) {
+    console.error('Failed to restart webtop:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 // Get session messages (for loading history)
 app.get('/api/sessions/:id/messages', (req, res) => {
   const sessions = loadSessions();
@@ -198,6 +223,13 @@ wss.on('connection', (ws: WebSocket) => {
         case 'set_mcp_servers':
           await handleSetMcpServers(ws, message);
           break;
+
+        case 'client_log': {
+          const levelMap: Record<string, string> = { log: 'LOG', warn: 'WARN', error: 'ERROR', info: 'INFO' };
+          const prefix = levelMap[message.level] || 'LOG';
+          console.log(`[CLIENT ${prefix}] ${message.message}`);
+          break;
+        }
 
         default:
           console.log('Unknown message type:', message.type);
@@ -246,7 +278,7 @@ async function handleStartSession(ws: WebSocket, message: any) {
 }
 
 async function handleSendMessage(ws: WebSocket, message: any) {
-  const { sessionId, prompt, resume } = message;
+  const { sessionId, prompt, resume, images } = message;
 
   try {
     // Load MCP config
@@ -268,8 +300,42 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       options.resume = resume;
     }
 
+    // Build prompt — string for text-only, AsyncIterable<SDKUserMessage> for multimodal
+    let queryPrompt: string | AsyncIterable<SDKUserMessage>;
+
+    if (images && Array.isArray(images) && images.length > 0) {
+      // Multimodal message with images
+      const contentBlocks: any[] = [
+        ...images.map((img: { data: string; mediaType: string }) => ({
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: img.mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+            data: img.data,
+          },
+        })),
+        { type: 'text' as const, text: prompt || 'What do you see in this image?' },
+      ];
+
+      queryPrompt = (async function* () {
+        yield {
+          type: 'user' as const,
+          message: {
+            role: 'user' as const,
+            content: contentBlocks,
+          },
+          parent_tool_use_id: null,
+          session_id: '',
+        } as SDKUserMessage;
+      })();
+
+      console.log(`Sending multimodal message with ${images.length} image(s)`);
+    } else {
+      queryPrompt = prompt;
+    }
+
     // Create query
-    const q = query({ prompt, options });
+    const q = query({ prompt: queryPrompt, options });
     activeQueries.set(sessionId, q);
 
     // Stream events to client with error handling

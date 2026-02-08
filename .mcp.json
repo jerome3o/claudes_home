@@ -8,6 +8,10 @@
       "command": "docker",
       "args": ["exec", "-i", "webtop", "computer-use-mcp"]
     },
+    "chrome-devtools": {
+      "command": "docker",
+      "args": ["exec", "-i", "webtop", "chrome-devtools-mcp", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"]
+    },
     "discord": {
       "command": "node",
       "args": ["/root/source/claudes_home/discord-mcp/build/index.js"]

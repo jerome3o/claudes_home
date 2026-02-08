@@ -1,4 +1,55 @@
+// ============================
+// Remote Console Log Piping
+// ============================
+// Must be defined early so all subsequent console calls are captured
+
+const _origConsole = {
+  log: console.log.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  info: console.info.bind(console),
+};
+
+function _sendRemoteLog(level, args) {
+  // ws is declared below — this function is called after ws exists
+  if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      const msg = args.map(a => {
+        if (a instanceof Error) return `${a.message}\n${a.stack}`;
+        if (typeof a === 'object') {
+          try { return JSON.stringify(a); } catch { return String(a); }
+        }
+        return String(a);
+      }).join(' ');
+
+      ws.send(JSON.stringify({
+        type: 'client_log',
+        level,
+        message: msg,
+        timestamp: Date.now(),
+      }));
+    } catch (e) {
+      // Avoid infinite recursion
+    }
+  }
+}
+
+console.log = (...args) => { _origConsole.log(...args); _sendRemoteLog('log', args); };
+console.warn = (...args) => { _origConsole.warn(...args); _sendRemoteLog('warn', args); };
+console.error = (...args) => { _origConsole.error(...args); _sendRemoteLog('error', args); };
+console.info = (...args) => { _origConsole.info(...args); _sendRemoteLog('info', args); };
+
+// Catch uncaught errors and unhandled rejections
+window.addEventListener('error', (e) => {
+  _sendRemoteLog('error', [`Uncaught: ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`]);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  _sendRemoteLog('error', [`Unhandled Promise: ${e.reason}`]);
+});
+
+// ============================
 // State
+// ============================
 let ws = null;
 let currentSessionId = null;
 let currentSdkSessionId = null; // SDK-level session ID for resumption
@@ -6,6 +57,7 @@ let sessions = [];
 let isConnected = false;
 let isSending = false;
 let sendingTimeout = null;
+let pendingImages = []; // Array of { data: base64, mediaType: string }
 
 // DOM elements
 const sidebar = document.getElementById('sidebar');
@@ -29,7 +81,12 @@ const vncViewer = document.getElementById('vncViewer');
 const vncMinimizeBtn = document.getElementById('vncMinimizeBtn');
 const vncMaximizeBtn = document.getElementById('vncMaximizeBtn');
 const vncCloseBtn = document.getElementById('vncCloseBtn');
+const vncRestartBtn = document.getElementById('vncRestartBtn');
 const vncHeader = document.querySelector('.vnc-header');
+const attachBtn = document.getElementById('attachBtn');
+const imageInput = document.getElementById('imageInput');
+const imagePreview = document.getElementById('imagePreview');
+const refreshAppBtn = document.getElementById('refreshAppBtn');
 
 // Initialize
 init();
@@ -83,10 +140,18 @@ function setupEventListeners() {
   vncMinimizeBtn.addEventListener('click', minimizeVnc);
   vncMaximizeBtn.addEventListener('click', toggleMaximizeVnc);
   vncCloseBtn.addEventListener('click', closeVnc);
+  vncRestartBtn.addEventListener('click', restartWebtop);
 
   // Make VNC draggable and resizable
   setupVncDragging();
   setupVncResizing();
+
+  // Image attach
+  attachBtn.addEventListener('click', () => imageInput.click());
+  imageInput.addEventListener('change', handleImageSelect);
+
+  // PWA refresh
+  refreshAppBtn.addEventListener('click', refreshApp);
 }
 
 // WebSocket
@@ -453,7 +518,8 @@ function startSession(sessionId) {
 // Send message
 function sendMessage() {
   const text = messageInput.value.trim();
-  if (!text || !isConnected || isSending) return;
+  const hasImages = pendingImages.length > 0;
+  if ((!text && !hasImages) || !isConnected || isSending) return;
 
   isSending = true;
   sendBtn.disabled = true;
@@ -468,20 +534,40 @@ function sendMessage() {
     addMessage('system', 'Query timed out after 5 minutes', 'error');
   }, 5 * 60 * 1000);
 
-  // Add user message to UI
-  addMessage('user', text);
+  // Add user message to UI (with image thumbnails if present)
+  let displayContent = text || '';
+  if (hasImages) {
+    const thumbsHtml = pendingImages.map(img =>
+      `<img src="data:${img.mediaType};base64,${img.data}" class="message-image-thumb" alt="attached image">`
+    ).join('');
+    displayContent = thumbsHtml + (text ? `<p>${escapeHtml(text)}</p>` : '');
+    addMessageHtml('user', displayContent);
+  } else {
+    addMessage('user', text);
+  }
 
-  // Send to server
-  send({
+  // Build message payload
+  const payload = {
     type: 'send_message',
     sessionId: currentSessionId,
-    prompt: text,
-    resume: currentSdkSessionId // Resume if available
-  });
+    prompt: text || 'What do you see in this image?',
+    resume: currentSdkSessionId,
+  };
 
-  // Clear input
+  // Include images if present
+  if (hasImages) {
+    payload.images = pendingImages.map(img => ({
+      data: img.data,
+      mediaType: img.mediaType,
+    }));
+  }
+
+  send(payload);
+
+  // Clear input and images
   messageInput.value = '';
   messageInput.style.height = 'auto';
+  clearPendingImages();
 }
 
 function interrupt() {
@@ -559,6 +645,111 @@ function scrollToBottom() {
   requestAnimationFrame(() => {
     messages.scrollTop = messages.scrollHeight;
   });
+}
+
+// ============================
+// Image Upload
+// ============================
+
+function handleImageSelect(e) {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  files.forEach(file => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 10 * 1024 * 1024) {
+      addMessage('system', `Image ${file.name} is too large (max 10MB)`, 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const dataUrl = evt.target.result;
+      // Extract base64 data and media type
+      const [header, data] = dataUrl.split(',');
+      const mediaType = header.match(/data:(.*?);/)[1];
+
+      pendingImages.push({ data, mediaType });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Reset file input so same file can be selected again
+  e.target.value = '';
+}
+
+function renderImagePreviews() {
+  imagePreview.innerHTML = pendingImages.map((img, i) => `
+    <div class="image-preview-item">
+      <img src="data:${img.mediaType};base64,${img.data}" alt="preview">
+      <button class="image-preview-remove" data-index="${i}" title="Remove">✕</button>
+    </div>
+  `).join('');
+
+  // Add remove handlers
+  imagePreview.querySelectorAll('.image-preview-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.index);
+      pendingImages.splice(idx, 1);
+      renderImagePreviews();
+    });
+  });
+}
+
+function clearPendingImages() {
+  pendingImages = [];
+  imagePreview.innerHTML = '';
+}
+
+// Render a user message with raw HTML content (for image thumbnails)
+function addMessageHtml(role, htmlContent) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message';
+
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  messageDiv.innerHTML = `
+    <div class="message-header">
+      <span class="message-role ${role}">${role}</span>
+      <span class="message-time">${time}</span>
+    </div>
+    <div class="message-content">${htmlContent}</div>
+  `;
+
+  messages.appendChild(messageDiv);
+  scrollToBottom();
+}
+
+// ============================
+// PWA: Refresh App
+// ============================
+
+async function refreshApp() {
+  if (!confirm('Clear cache and reload the app?')) return;
+
+  refreshAppBtn.disabled = true;
+  refreshAppBtn.textContent = '⏳ Refreshing...';
+
+  try {
+    // Unregister all service workers
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(r => r.unregister()));
+    }
+
+    // Clear all caches
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => caches.delete(k)));
+
+    // Hard reload
+    window.location.reload();
+  } catch (err) {
+    console.error('Refresh failed:', err);
+    refreshAppBtn.disabled = false;
+    refreshAppBtn.textContent = '🔄 Refresh App';
+    alert('Refresh failed: ' + err.message);
+  }
 }
 
 // ============================
@@ -676,6 +867,41 @@ function closeVnc() {
   setVncState('hidden');
 }
 
+async function restartWebtop() {
+  if (!confirm('Restart the webtop computer? This will take about 15-30 seconds.')) return;
+
+  const btn = vncRestartBtn;
+  const originalText = btn.textContent;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+
+  try {
+    const response = await fetch('/api/webtop/restart', { method: 'POST' });
+    const data = await response.json();
+
+    if (data.success) {
+      btn.textContent = '✅';
+      // Reload the VNC iframe after a delay for the container to come back up
+      setTimeout(() => {
+        const vncFrame = document.getElementById('vncFrame');
+        if (vncFrame && vncLoaded) {
+          vncFrame.src = '/vnc/';
+        }
+        btn.textContent = originalText;
+        btn.disabled = false;
+      }, 15000);
+    } else {
+      btn.textContent = '❌';
+      alert('Failed to restart: ' + (data.error || 'Unknown error'));
+      setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 3000);
+    }
+  } catch (err) {
+    btn.textContent = '❌';
+    alert('Failed to restart webtop: ' + err.message);
+    setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 3000);
+  }
+}
+
 // VNC dragging
 function setupVncDragging() {
   let isDragging = false;
@@ -790,4 +1016,115 @@ function setupVncResizing() {
     vncViewer.classList.remove('resizing');
     savePipRect();
   }
+}
+
+// ============================
+// PWA: Service Worker Registration
+// ============================
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/service-worker.js')
+      .then((registration) => {
+        console.log('SW registered, scope:', registration.scope);
+
+        // Listen for updates
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'activated') {
+                console.log('New service worker activated');
+              }
+            });
+          }
+        });
+      })
+      .catch((error) => {
+        console.error('SW registration failed:', error);
+      });
+  });
+}
+
+// ============================
+// PWA: Install Prompt
+// ============================
+
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  // Prevent the default mini-infobar on Android
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  showInstallButton();
+});
+
+window.addEventListener('appinstalled', () => {
+  console.log('App installed successfully');
+  deferredInstallPrompt = null;
+  hideInstallButton();
+});
+
+function showInstallButton() {
+  let installBtn = document.getElementById('installBtn');
+  if (!installBtn) {
+    installBtn = document.createElement('button');
+    installBtn.id = 'installBtn';
+    installBtn.className = 'btn-secondary install-btn';
+    installBtn.innerHTML = '<span class="install-icon">+</span> Install App';
+    installBtn.addEventListener('click', async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      const result = await deferredInstallPrompt.userChoice;
+      console.log('Install prompt result:', result.outcome);
+      deferredInstallPrompt = null;
+      hideInstallButton();
+    });
+
+    // Add to sidebar footer, before the MCP Config button
+    const sidebarFooter = document.querySelector('.sidebar-footer');
+    if (sidebarFooter) {
+      sidebarFooter.insertBefore(installBtn, sidebarFooter.firstChild);
+    }
+  }
+  installBtn.style.display = 'block';
+}
+
+function hideInstallButton() {
+  const installBtn = document.getElementById('installBtn');
+  if (installBtn) {
+    installBtn.style.display = 'none';
+  }
+}
+
+// ============================
+// PWA: Online/Offline Status
+// ============================
+
+const offlineBanner = document.getElementById('offlineBanner');
+
+function updateOnlineStatus() {
+  if (!offlineBanner) return;
+  if (navigator.onLine) {
+    offlineBanner.style.display = 'none';
+  } else {
+    offlineBanner.style.display = 'flex';
+  }
+}
+
+window.addEventListener('online', updateOnlineStatus);
+window.addEventListener('offline', updateOnlineStatus);
+
+// Check on load
+updateOnlineStatus();
+
+// ============================
+// PWA: Standalone Mode Detection
+// ============================
+
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                  || window.navigator.standalone === true;
+
+if (isStandalone) {
+  document.documentElement.classList.add('pwa-standalone');
 }

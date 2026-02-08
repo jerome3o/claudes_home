@@ -5,7 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0f0f0f">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Claude</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="stylesheet" href="/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
 </head>
@@ -24,6 +29,7 @@
       <div id="sessionList" class="session-list"></div>
 
       <div class="sidebar-footer">
+        <button id="refreshAppBtn" class="btn-secondary">🔄 Refresh App</button>
         <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
       </div>
     </div>
@@ -43,10 +49,21 @@
 
       <!-- Input -->
       <div class="input-container">
-        <textarea id="messageInput" placeholder="Message Claude..." rows="1"></textarea>
-        <button id="sendBtn" class="send-btn">↑</button>
+        <div id="imagePreview" class="image-preview"></div>
+        <div class="input-row">
+          <input type="file" id="imageInput" accept="image/*" multiple hidden>
+          <button id="attachBtn" class="icon-btn attach-btn" title="Attach image">📎</button>
+          <textarea id="messageInput" placeholder="Message Claude..." rows="1"></textarea>
+          <button id="sendBtn" class="send-btn">↑</button>
+        </div>
       </div>
     </div>
+  </div>
+
+  <!-- Offline Banner -->
+  <div id="offlineBanner" class="offline-banner" style="display: none;">
+    <span class="offline-icon">&#9888;</span>
+    <span>You are offline. Reconnecting...</span>
   </div>
 
   <!-- MCP Config Modal -->
@@ -72,6 +89,7 @@
     <div class="vnc-header">
       <span class="vnc-title">🖥️ Webtop VNC</span>
       <div class="vnc-controls">
+        <button id="vncRestartBtn" class="vnc-btn vnc-restart-btn" title="Restart Computer">🔄</button>
         <button id="vncMinimizeBtn" class="vnc-btn" title="Minimize">−</button>
         <button id="vncMaximizeBtn" class="vnc-btn" title="Maximize">□</button>
         <button id="vncCloseBtn" class="vnc-btn" title="Close">✕</button>

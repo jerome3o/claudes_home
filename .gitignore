@@ -7,3 +7,7 @@ dist/
 # Docker shared folders
 shared/
 downloads/
+
+# Runtime data (session history, local MCP config with machine-specific paths)
+claude-web/data/sessions.json
+claude-web/data/mcp-config.json

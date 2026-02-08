@@ -159,8 +159,22 @@ interface SessionMessage {
 
 ## MCP Configuration
 
-MCP servers are configured in `data/mcp-config.json` with this structure:
+MCP servers are configured in `data/mcp-config.json`. Current servers:
 
+### Active MCP Servers
+
+1. **computer-use** — Desktop control (mouse, keyboard, screenshots) via `computer-use-mcp` in webtop
+2. **chrome-devtools** — Chrome DevTools Protocol (26 tools: JS eval, DOM inspect, network, screenshots, click, fill, navigate, etc.) via `chrome-devtools-mcp` connecting to Chrome on port 9222
+3. **discord** — Discord bot integration (send messages, read channels, reactions)
+
+### Chrome DevTools MCP Setup
+- **Package:** `chrome-devtools-mcp` v0.16.0 (Google/ChromeDevTools team)
+- **Requires:** Chrome launched with `--remote-debugging-port=9222` (patched in `/usr/bin/chromium-browser`)
+- **Connection:** `--browserUrl http://127.0.0.1:9222`
+- **Key tools:** `evaluate_script`, `take_screenshot`, `take_snapshot`, `navigate_page`, `click`, `fill`, `list_console_messages`, `list_network_requests`, `press_key`
+- **Persistent:** Init script at `/config/custom-cont-init.d/98-fix-chromium.sh` patches Chrome and installs the MCP on container restart
+
+### Config format
 ```json
 {
   "server-name": {
