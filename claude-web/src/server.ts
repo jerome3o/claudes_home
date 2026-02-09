@@ -6,7 +6,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import multer from 'multer';
+import { Cron } from 'croner';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Query, SDKMessage, SDKUserMessage, Options as SDKOptions, McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import Database from 'better-sqlite3';
@@ -60,6 +62,52 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp);
+
+  CREATE TABLE IF NOT EXISTS sdk_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL,
+    turn_index INTEGER DEFAULT 0,
+    timestamp INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sdk_events_session ON sdk_events(session_id, timestamp);
+
+  CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'cron',
+    cron_expression TEXT,
+    timezone TEXT DEFAULT 'UTC',
+    prompt TEXT NOT NULL,
+    session_mode TEXT NOT NULL DEFAULT 'new',
+    session_id TEXT,
+    webhook_path TEXT,
+    webhook_secret TEXT,
+    enabled INTEGER DEFAULT 1,
+    model TEXT DEFAULT 'opus',
+    max_turns INTEGER DEFAULT 0,
+    max_budget_usd REAL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS task_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES sessions(id),
+    status TEXT NOT NULL DEFAULT 'running',
+    trigger_type TEXT NOT NULL,
+    trigger_data TEXT,
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME,
+    error TEXT,
+    result_summary TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at);
 `);
 
 // Migrate from JSON if old sessions.json exists and DB is empty
@@ -136,6 +184,39 @@ const stmts = {
     'INSERT INTO messages (session_id, role, content, timestamp, useMarkdown, status) VALUES (?, ?, ?, ?, ?, ?)'
   ),
   getMessageCount: db.prepare('SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?'),
+  // SDK events persistence
+  insertSdkEvent: db.prepare(
+    'INSERT INTO sdk_events (session_id, event_type, event_data, turn_index, timestamp) VALUES (?, ?, ?, ?, ?)'
+  ),
+  getSdkEvents: db.prepare(
+    'SELECT event_type, event_data, turn_index, timestamp FROM sdk_events WHERE session_id = ? ORDER BY timestamp ASC, id ASC'
+  ),
+  getSdkEventCount: db.prepare('SELECT COUNT(*) as cnt FROM sdk_events WHERE session_id = ?'),
+  // Scheduled tasks
+  getAllTasks: db.prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC'),
+  getTask: db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?'),
+  getTaskByWebhookPath: db.prepare("SELECT * FROM scheduled_tasks WHERE type = 'webhook' AND webhook_path = ? AND enabled = 1"),
+  createTask: db.prepare(
+    `INSERT INTO scheduled_tasks (id, name, type, cron_expression, timezone, prompt, session_mode, session_id, webhook_path, webhook_secret, enabled, model, max_turns, max_budget_usd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ),
+  updateTask: db.prepare(
+    `UPDATE scheduled_tasks SET name=?, type=?, cron_expression=?, timezone=?, prompt=?, session_mode=?, session_id=?,
+     webhook_path=?, webhook_secret=?, enabled=?, model=?, max_turns=?, max_budget_usd=?, updated_at=CURRENT_TIMESTAMP
+     WHERE id=?`
+  ),
+  deleteTask: db.prepare('DELETE FROM scheduled_tasks WHERE id = ?'),
+  getEnabledCronTasks: db.prepare("SELECT * FROM scheduled_tasks WHERE type = 'cron' AND enabled = 1"),
+  // Task runs
+  insertTaskRun: db.prepare(
+    'INSERT INTO task_runs (id, task_id, session_id, status, trigger_type, trigger_data) VALUES (?, ?, ?, ?, ?, ?)'
+  ),
+  updateTaskRunStatus: db.prepare(
+    'UPDATE task_runs SET status=?, finished_at=CURRENT_TIMESTAMP, error=?, result_summary=? WHERE id=?'
+  ),
+  getTaskRuns: db.prepare('SELECT * FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 50'),
+  getTaskRun: db.prepare('SELECT * FROM task_runs WHERE id = ?'),
+  markInterruptedRuns: db.prepare("UPDATE task_runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP WHERE status = 'running'"),
 };
 
 // Session interfaces (for type safety)
@@ -152,46 +233,8 @@ const activeQueries = new Map<string, Query>();
 const sessionConnections = new Map<string, Set<WebSocket>>();
 // Track ALL connected websockets for cross-session notifications
 const allConnections = new Set<WebSocket>();
-// Disconnect timers: abort orphaned queries after grace period
-const disconnectTimers = new Map<string, NodeJS.Timeout>();
-const DISCONNECT_GRACE_MS = 10_000; // 10 seconds before aborting orphaned query
-
-// ============================
-// Query lifecycle helpers
-// ============================
-
-/** Start a disconnect timer for a session — aborts the query after grace period */
-function startDisconnectTimer(sessionId: string) {
-  // Don't start if there's no active query
-  if (!activeQueries.has(sessionId)) return;
-  // Don't start if there are still connected clients
-  const conns = sessionConnections.get(sessionId);
-  if (conns && conns.size > 0) return;
-  // Don't restart if timer already running
-  if (disconnectTimers.has(sessionId)) return;
-
-  console.log(`[lifecycle] Starting ${DISCONNECT_GRACE_MS}ms disconnect timer for session ${sessionId}`);
-  const timer = setTimeout(() => {
-    disconnectTimers.delete(sessionId);
-    const q = activeQueries.get(sessionId);
-    if (q) {
-      console.log(`[lifecycle] Aborting orphaned query for session ${sessionId}`);
-      try { q.close(); } catch (e) { console.error('[lifecycle] Error closing query:', e); }
-      activeQueries.delete(sessionId);
-    }
-  }, DISCONNECT_GRACE_MS);
-  disconnectTimers.set(sessionId, timer);
-}
-
-/** Cancel a disconnect timer (client reconnected in time) */
-function cancelDisconnectTimer(sessionId: string) {
-  const timer = disconnectTimers.get(sessionId);
-  if (timer) {
-    console.log(`[lifecycle] Cancelled disconnect timer for session ${sessionId} (client reconnected)`);
-    clearTimeout(timer);
-    disconnectTimers.delete(sessionId);
-  }
-}
+// Queries run to completion even if all clients disconnect.
+// No orphan abort — user wants async background execution.
 
 // ============================
 // Load/save MCP config (still file-based — small config)
@@ -246,6 +289,13 @@ app.use('/vnc', (req, res) => {
 app.get('/service-worker.js', (req, res, next) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.set('Service-Worker-Allowed', '/');
+  next();
+});
+
+// Security headers — prevent embedding in iframes (e.g. inside webtop browser)
+app.use((req, res, next) => {
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Content-Security-Policy', "frame-ancestors 'none'");
   next();
 });
 
@@ -642,6 +692,228 @@ app.get('/api/sessions/:id/messages', (req, res) => {
   }
 });
 
+// Get session SDK events (new persistence format)
+app.get('/api/sessions/:id/events', (req, res) => {
+  const session = stmts.getSession.get(req.params.id) as any;
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  const events = stmts.getSdkEvents.all(req.params.id) as any[];
+  const formatted = events.map(e => ({
+    event_type: e.event_type,
+    event_data: JSON.parse(e.event_data),
+    turn_index: e.turn_index,
+    timestamp: e.timestamp,
+  }));
+
+  res.json({ events: formatted, sdkSessionId: session.sdkSessionId });
+});
+
+// ============================
+// Scheduled Tasks API
+// ============================
+app.get('/api/tasks', (req, res) => {
+  const tasks = stmts.getAllTasks.all();
+  res.json(tasks);
+});
+
+app.post('/api/tasks', (req, res) => {
+  const { name, type, cron_expression, timezone, prompt, session_mode,
+          session_id, webhook_path, webhook_secret, enabled, model,
+          max_turns, max_budget_usd } = req.body;
+
+  if (!name || !prompt) {
+    res.status(400).json({ error: 'Name and prompt are required' });
+    return;
+  }
+
+  const id = randomUUID();
+  const taskType = type || 'cron';
+  const webhookPath = taskType === 'webhook' ? (webhook_path || id.slice(0, 8)) : null;
+
+  stmts.createTask.run(
+    id, name, taskType, cron_expression || null, timezone || 'UTC',
+    prompt, session_mode || 'new', session_id || null,
+    webhookPath, webhook_secret || null,
+    enabled !== undefined ? (enabled ? 1 : 0) : 1,
+    model || 'opus', max_turns ?? 0, max_budget_usd ?? 0
+  );
+
+  const task = stmts.getTask.get(id);
+
+  // If it's a cron task and enabled, schedule it
+  if (taskType === 'cron' && cron_expression && (enabled === undefined || enabled)) {
+    scheduleCronTask(task as any);
+  }
+
+  res.json(task);
+});
+
+app.get('/api/tasks/:id', (req, res) => {
+  const task = stmts.getTask.get(req.params.id);
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+  res.json(task);
+});
+
+app.put('/api/tasks/:id', (req, res) => {
+  const existing = stmts.getTask.get(req.params.id) as any;
+  if (!existing) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+
+  const { name, type, cron_expression, timezone, prompt, session_mode,
+          session_id, webhook_path, webhook_secret, enabled, model,
+          max_turns, max_budget_usd } = req.body;
+
+  stmts.updateTask.run(
+    name ?? existing.name,
+    type ?? existing.type,
+    cron_expression ?? existing.cron_expression,
+    timezone ?? existing.timezone,
+    prompt ?? existing.prompt,
+    session_mode ?? existing.session_mode,
+    session_id ?? existing.session_id,
+    webhook_path ?? existing.webhook_path,
+    webhook_secret ?? existing.webhook_secret,
+    enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
+    model ?? existing.model,
+    max_turns ?? existing.max_turns,
+    max_budget_usd ?? existing.max_budget_usd,
+    req.params.id
+  );
+
+  // Re-schedule cron task
+  unscheduleCronTask(req.params.id);
+  const updated = stmts.getTask.get(req.params.id) as any;
+  if (updated.type === 'cron' && updated.cron_expression && updated.enabled) {
+    scheduleCronTask(updated);
+  }
+
+  res.json(updated);
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  unscheduleCronTask(req.params.id);
+  stmts.deleteTask.run(req.params.id);
+  res.json({ success: true });
+});
+
+// Manually trigger a task
+app.post('/api/tasks/:id/run', (req, res) => {
+  const task = stmts.getTask.get(req.params.id) as any;
+  if (!task) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+
+  // Fire-and-forget execution
+  executeTask(task, 'manual').catch(e => console.error('Manual task execution failed:', e));
+
+  res.status(202).json({ status: 'started', taskId: task.id });
+});
+
+// Get runs for a task
+app.get('/api/tasks/:id/runs', (req, res) => {
+  const runs = stmts.getTaskRuns.all(req.params.id);
+  res.json(runs);
+});
+
+// Get a specific run
+app.get('/api/runs/:id', (req, res) => {
+  const run = stmts.getTaskRun.get(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  res.json(run);
+});
+
+// ============================
+// AI Cron Expression Generator
+// ============================
+app.post('/api/generate-cron', async (req, res) => {
+  const { description } = req.body;
+  if (!description) {
+    res.status(400).json({ error: 'Description is required' });
+    return;
+  }
+
+  try {
+    // Use a quick Claude query to generate the cron expression
+    const prompt = `Convert this schedule description to a standard 5-field cron expression (minute hour day-of-month month day-of-week). Reply with ONLY the cron expression, nothing else. No explanation, no backticks, just the 5 fields separated by spaces.
+
+Schedule: "${description}"`;
+
+    const q = query({
+      prompt,
+      options: {
+        model: 'haiku',
+        maxTurns: 1,
+      },
+    });
+
+    let result = '';
+    for await (const event of q) {
+      if (event.type === 'assistant' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'text') {
+            result += block.text;
+          }
+        }
+      }
+    }
+
+    // Clean up - extract just the cron expression (5 fields)
+    const cleaned = result.trim().replace(/`/g, '').trim();
+    const cronMatch = cleaned.match(/^[\d*,\/-]+\s+[\d*,\/-]+\s+[\d*,\/-]+\s+[\d*,\/-]+\s+[\d*,\/-]+/);
+
+    if (cronMatch) {
+      res.json({ cron: cronMatch[0], raw: cleaned });
+    } else {
+      res.json({ cron: cleaned, raw: cleaned });
+    }
+  } catch (e) {
+    console.error('Cron generation error:', e);
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ============================
+// Webhook Endpoint
+// ============================
+app.post('/hook/:path', (req, res) => {
+  const task = stmts.getTaskByWebhookPath.get(req.params.path) as any;
+  if (!task) {
+    res.status(404).json({ error: 'Webhook not found' });
+    return;
+  }
+
+  // Auth check
+  if (task.webhook_secret) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${task.webhook_secret}`) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  }
+
+  const triggerData = req.body || {};
+  const runId = randomUUID();
+
+  // Fire-and-forget execution
+  executeTask(task, 'webhook', triggerData).catch(e =>
+    console.error('Webhook task execution failed:', e)
+  );
+
+  res.status(202).json({ runId, status: 'started', taskId: task.id });
+});
+
 // ============================
 // WebSocket handling
 // ============================
@@ -682,13 +954,9 @@ wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
             oldConns.delete(ws);
             if (oldConns.size === 0) {
               sessionConnections.delete(currentSessionId);
-              // Batch 1B: start disconnect timer for old session on switch
-              startDisconnectTimer(currentSessionId);
             }
           }
           currentSessionId = message.sessionId;
-          // Cancel any disconnect timer for the session we're joining
-          cancelDisconnectTimer(message.sessionId);
           await handleStartSession(ws, message);
           break;
         }
@@ -732,8 +1000,6 @@ wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
       connections.delete(ws);
       if (connections.size === 0) {
         sessionConnections.delete(currentSessionId);
-        // Batch 1A: start disconnect timer — abort orphaned query after grace period
-        startDisconnectTimer(currentSessionId);
       }
     }
   });
@@ -741,9 +1007,6 @@ wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
 
 async function handleStartSession(ws: WebSocket, message: any) {
   const { sessionId } = message;
-
-  // Cancel disconnect timer — client reconnected
-  cancelDisconnectTimer(sessionId);
 
   // Track connection
   if (!sessionConnections.has(sessionId)) {
@@ -772,9 +1035,6 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       try { existingQuery.close(); } catch (e) { console.error('[lifecycle] Error closing existing query:', e); }
       activeQueries.delete(sessionId);
     }
-
-    // Cancel any pending disconnect timer (we're actively using this session)
-    cancelDisconnectTimer(sessionId);
 
     // Save user message immediately (don't rely on SDK echo)
     // Dedup: skip if identical message was pre-saved via REST within last 5s
@@ -844,14 +1104,35 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     const q = query({ prompt: queryPrompt, options });
     activeQueries.set(sessionId, q);
 
+    // Save user message as SDK event for persistence
+    if (prompt) {
+      try {
+        stmts.insertSdkEvent.run(
+          sessionId,
+          'user',
+          JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }),
+          0,
+          Date.now()
+        );
+      } catch (e) {
+        console.error('Failed to persist user SDK event:', e);
+      }
+    }
+
     // Stream events to client with error handling
+    let turnIndex = 0;
     try {
       for await (const event of q) {
+        // Increment turn on each assistant message
+        if (event.type === 'assistant') {
+          turnIndex++;
+        }
         broadcastToSession(sessionId, {
           type: 'sdk_event',
           sessionId,
           event,
-        });
+          timestamp: Date.now(),
+        }, turnIndex);
       }
 
       // Query completed — notify session subscribers
@@ -939,7 +1220,7 @@ function saveSdkSessionId(sessionId: string, sdkSessionId: string) {
   stmts.updateSdkSessionId.run(sdkSessionId, sessionId);
 }
 
-function broadcastToSession(sessionId: string, data: any) {
+function broadcastToSession(sessionId: string, data: any, turnIndex: number = 0) {
   const connections = sessionConnections.get(sessionId);
   if (connections) {
     const message = JSON.stringify(data);
@@ -950,22 +1231,27 @@ function broadcastToSession(sessionId: string, data: any) {
     });
   }
 
-  // Save messages to session history
+  // Persist SDK events to the new sdk_events table
   if (data.type === 'sdk_event' && data.event) {
     const event = data.event;
+    const ts = data.timestamp || Date.now();
 
+    // Save the SDK session ID for resumption
     if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
       saveSdkSessionId(sessionId, event.session_id);
-    } else if (event.type === 'assistant' && event.message) {
-      const content = extractMessageContent(event.message);
-      if (content) {
-        saveSessionMessage(sessionId, {
-          role: 'assistant',
-          content,
-          timestamp: Date.now(),
-          useMarkdown: true,
-        });
-      }
+    }
+
+    // Persist all event types to sdk_events table
+    try {
+      stmts.insertSdkEvent.run(
+        sessionId,
+        event.type,
+        JSON.stringify(event),
+        turnIndex,
+        ts
+      );
+    } catch (e) {
+      console.error('Failed to persist SDK event:', e);
     }
   }
 }
@@ -1045,6 +1331,173 @@ server.on('upgrade', (req, socket, head) => {
     });
   }
 });
+
+// ============================
+// Scheduled Task Execution Engine
+// ============================
+const activeCronJobs = new Map<string, Cron>();
+
+function scheduleCronTask(task: any) {
+  try {
+    const job = new Cron(task.cron_expression, { timezone: task.timezone || 'UTC' }, () => {
+      console.log(`[cron] Firing task "${task.name}" (${task.id})`);
+      executeTask(task, 'cron').catch(e => console.error(`[cron] Task "${task.name}" failed:`, e));
+    });
+    activeCronJobs.set(task.id, job);
+    console.log(`[cron] Scheduled task "${task.name}" with expression "${task.cron_expression}"`);
+  } catch (e) {
+    console.error(`[cron] Failed to schedule task "${task.name}":`, e);
+  }
+}
+
+function unscheduleCronTask(taskId: string) {
+  const job = activeCronJobs.get(taskId);
+  if (job) {
+    job.stop();
+    activeCronJobs.delete(taskId);
+  }
+}
+
+async function executeTask(task: any, triggerType: string, triggerData?: any): Promise<void> {
+  const runId = randomUUID();
+  let sessionId: string;
+
+  try {
+    // Create or reuse session
+    if (task.session_mode === 'reuse' && task.session_id) {
+      // Verify session exists
+      const existing = stmts.getSession.get(task.session_id) as any;
+      if (existing) {
+        sessionId = task.session_id;
+        stmts.updateLastActive.run(Date.now(), sessionId);
+      } else {
+        // Session was deleted, create new
+        sessionId = createTaskSession(task);
+      }
+    } else {
+      sessionId = createTaskSession(task);
+    }
+
+    // Insert task run record
+    stmts.insertTaskRun.run(runId, task.id, sessionId, 'running', triggerType, triggerData ? JSON.stringify(triggerData) : null);
+
+    // Build prompt
+    let fullPrompt = task.prompt;
+    if (triggerType === 'webhook' && triggerData) {
+      fullPrompt = `<task_prompt>\n${task.prompt}\n</task_prompt>\n\n<webhook_data>\n${JSON.stringify(triggerData, null, 2)}\n</webhook_data>`;
+    }
+
+    // Load MCP config
+    const mcpServers = loadMcpConfig();
+
+    // Create query options (0 = unlimited for turns/budget)
+    const options: SDKOptions = {
+      cwd: process.cwd(),
+      mcpServers,
+      ...(task.max_turns > 0 && { maxTurns: task.max_turns }),
+      ...(task.max_budget_usd > 0 && { maxBudgetUsd: task.max_budget_usd }),
+      ...(task.model && { model: task.model }),
+      canUseTool: async (toolName, input) => ({
+        behavior: 'allow',
+        updatedInput: input,
+      }),
+    };
+
+    // Resume if session has SDK session ID
+    const session = stmts.getSession.get(sessionId) as any;
+    if (session?.sdkSessionId) {
+      options.resume = session.sdkSessionId;
+    }
+
+    // Save user message as SDK event
+    stmts.insertSdkEvent.run(
+      sessionId,
+      'user',
+      JSON.stringify({ type: 'user', message: { role: 'user', content: fullPrompt } }),
+      0,
+      Date.now()
+    );
+
+    // Run query
+    const q = query({ prompt: fullPrompt, options });
+    activeQueries.set(sessionId, q);
+
+    let turnIndex = 0;
+    try {
+      for await (const event of q) {
+        if (event.type === 'assistant') turnIndex++;
+
+        // broadcastToSession handles both persistence (to sdk_events table)
+        // and broadcasting to any connected clients viewing this session
+        broadcastToSession(sessionId, {
+          type: 'sdk_event',
+          sessionId,
+          event,
+          timestamp: Date.now(),
+        }, turnIndex);
+      }
+
+      // Query completed
+      broadcastToSession(sessionId, { type: 'query_completed', sessionId });
+      broadcastToAll({
+        type: 'session_notification',
+        sessionId,
+        sessionName: (stmts.getSession.get(sessionId) as any)?.name || 'Task',
+        notification: 'completed',
+      });
+
+      stmts.updateTaskRunStatus.run('completed', null, `Completed in ${turnIndex} turns`, runId);
+      console.log(`[task] "${task.name}" completed successfully in ${turnIndex} turns`);
+    } catch (iterError) {
+      console.error(`[task] "${task.name}" iteration error:`, iterError);
+      stmts.updateTaskRunStatus.run(
+        'failed',
+        iterError instanceof Error ? iterError.message : String(iterError),
+        null,
+        runId
+      );
+      broadcastToSession(sessionId, {
+        type: 'error',
+        sessionId,
+        error: iterError instanceof Error ? iterError.message : String(iterError),
+      });
+    } finally {
+      activeQueries.delete(sessionId);
+    }
+  } catch (error) {
+    console.error(`[task] "${task.name}" execution error:`, error);
+    stmts.updateTaskRunStatus.run(
+      'failed',
+      error instanceof Error ? error.message : String(error),
+      null,
+      runId
+    );
+  }
+}
+
+function createTaskSession(task: any): string {
+  const id = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const now = Date.now();
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const name = `🤖 ${task.name} - ${dateStr}`;
+  stmts.createSession.run(id, name, null, now, now, null);
+  return id;
+}
+
+// Initialize cron scheduler on startup
+function initCronScheduler() {
+  // Mark any runs that were in-progress when server stopped
+  stmts.markInterruptedRuns.run();
+
+  // Load and schedule all enabled cron tasks
+  const tasks = stmts.getEnabledCronTasks.all() as any[];
+  console.log(`[cron] Loading ${tasks.length} scheduled task(s)`);
+  for (const task of tasks) {
+    scheduleCronTask(task);
+  }
+}
+
+initCronScheduler();
 
 // Start server
 const HOST = '0.0.0.0';

@@ -28,6 +28,15 @@
 
       <div id="sessionList" class="session-list"></div>
 
+      <!-- Scheduled Tasks Section -->
+      <div class="sidebar-tasks-section">
+        <div class="sidebar-tasks-header">
+          <h3>Scheduled Tasks</h3>
+          <button id="newTaskBtn" class="icon-btn" title="New Task">+</button>
+        </div>
+        <div id="taskList" class="task-list"></div>
+      </div>
+
       <div class="sidebar-footer">
         <button id="refreshAppBtn" class="btn-secondary">🔄 Refresh App</button>
         <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
@@ -191,6 +200,128 @@
     </div>
     <div id="fileBreadcrumb" class="file-breadcrumb"></div>
     <div id="fileList" class="file-list"></div>
+  </div>
+
+  <!-- Task Editor Modal -->
+  <div id="taskEditorModal" class="task-editor-modal" style="display: none;">
+    <div class="task-editor-header">
+      <h2 id="taskEditorTitle">New Task</h2>
+      <button id="taskEditorClose" class="icon-btn">✕</button>
+    </div>
+    <div class="task-editor-body">
+      <div class="te-field">
+        <label>Name</label>
+        <input type="text" id="teTaskName" placeholder="e.g., Book Badminton" />
+      </div>
+      <div class="te-field">
+        <label>Type</label>
+        <div class="te-toggle-group">
+          <button class="te-toggle active" data-value="cron" id="teTypeCron">Cron</button>
+          <button class="te-toggle" data-value="webhook" id="teTypeWebhook">Webhook</button>
+        </div>
+      </div>
+      <div class="te-field te-cron-fields">
+        <label>Cron Expression</label>
+        <div class="te-cron-row">
+          <input type="text" id="teCronExpr" placeholder="0 9 * * 4" />
+          <button id="teCronAiBtn" class="te-cron-ai-btn" title="Generate with AI">✨</button>
+        </div>
+        <span class="te-hint">min hour day month weekday (e.g., 0 9 * * 4 = Thu 9am)</span>
+        <div id="teCronAiInput" class="te-cron-ai-input" style="display: none;">
+          <input type="text" id="teCronAiPrompt" placeholder="e.g., every Thursday at 9am" />
+          <button id="teCronAiGenerate" class="btn-primary te-cron-ai-go">Go</button>
+        </div>
+      </div>
+      <div class="te-field te-cron-fields">
+        <label>Timezone</label>
+        <select id="teTimezone">
+          <option value="UTC">UTC</option>
+          <option value="America/New_York">US Eastern</option>
+          <option value="America/Chicago">US Central</option>
+          <option value="America/Denver">US Mountain</option>
+          <option value="America/Los_Angeles">US Pacific</option>
+          <option value="Europe/London" selected>London</option>
+          <option value="Europe/Paris">Paris</option>
+          <option value="Asia/Tokyo">Tokyo</option>
+          <option value="Asia/Shanghai">Shanghai</option>
+          <option value="Australia/Sydney">Sydney</option>
+          <option value="Pacific/Auckland">Auckland</option>
+        </select>
+      </div>
+      <div class="te-field te-webhook-fields" style="display: none;">
+        <label>Webhook Path</label>
+        <input type="text" id="teWebhookPath" placeholder="auto-generated" />
+        <span class="te-hint" id="teWebhookUrl"></span>
+      </div>
+      <div class="te-field te-webhook-fields" style="display: none;">
+        <label>Webhook Secret (optional)</label>
+        <input type="text" id="teWebhookSecret" placeholder="Bearer token for auth" />
+      </div>
+      <div class="te-field">
+        <label>Prompt</label>
+        <textarea id="tePrompt" class="te-prompt" rows="6" placeholder="Describe what the agent should do..."></textarea>
+      </div>
+      <div class="te-field">
+        <label>Session Mode</label>
+        <div class="te-toggle-group">
+          <button class="te-toggle active" data-value="new" id="teModeNew">New each run</button>
+          <button class="te-toggle" data-value="reuse" id="teModeReuse">Reuse session</button>
+        </div>
+      </div>
+      <div class="te-field te-reuse-fields" style="display: none;">
+        <label>Session</label>
+        <select id="teSessionId">
+          <option value="">Select a session...</option>
+        </select>
+      </div>
+      <div class="te-field-row">
+        <div class="te-field te-field-half">
+          <label>Model</label>
+          <select id="teModel">
+            <option value="opus" selected>Opus</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="haiku">Haiku</option>
+          </select>
+        </div>
+        <div class="te-field te-field-half">
+          <label>Max Turns</label>
+          <input type="number" id="teMaxTurns" value="0" min="0" max="1000" />
+          <span class="te-hint">0 = unlimited</span>
+        </div>
+      </div>
+      <div class="te-field-row">
+        <div class="te-field te-field-half">
+          <label>Max Budget ($)</label>
+          <input type="number" id="teMaxBudget" value="0" min="0" max="1000" step="0.01" />
+          <span class="te-hint">0 = unlimited</span>
+        </div>
+        <div class="te-field te-field-half">
+          <label>Enabled</label>
+          <label class="te-switch">
+            <input type="checkbox" id="teEnabled" checked />
+            <span class="te-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="task-editor-footer">
+      <button id="teRunNowBtn" class="btn-secondary" style="display: none;">Run Now</button>
+      <button id="teViewRunsBtn" class="btn-secondary" style="display: none;">View Runs</button>
+      <div class="te-footer-spacer"></div>
+      <button id="teDeleteBtn" class="btn-danger" style="display: none;">Delete</button>
+      <button id="teSaveBtn" class="btn-primary">Save</button>
+    </div>
+  </div>
+
+  <!-- Task Runs Modal -->
+  <div id="taskRunsModal" class="task-editor-modal" style="display: none;">
+    <div class="task-editor-header">
+      <h2 id="taskRunsTitle">Task Runs</h2>
+      <button id="taskRunsClose" class="icon-btn">✕</button>
+    </div>
+    <div class="task-editor-body">
+      <div id="taskRunsList" class="task-runs-list"></div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

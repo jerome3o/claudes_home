@@ -1,4 +1,27 @@
 // ============================
+// Webtop Detection — block app from loading inside the VNC desktop
+// ============================
+// The webtop runs Linux x86_64 Chrome. Your phone runs Android.
+// If we detect a desktop Linux UA without Android, show a blocker.
+(function() {
+  const ua = navigator.userAgent;
+  const isLinuxDesktop = ua.includes('Linux') && ua.includes('X11') && !ua.includes('Android');
+  // Also check if running inside the webtop by looking at screen size typical of VNC
+  // and the absence of touch support combined with Linux desktop
+  if (isLinuxDesktop) {
+    document.documentElement.innerHTML = `
+      <body style="background:#0f0f0f;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:2rem;">
+        <div>
+          <div style="font-size:3rem;margin-bottom:1rem;">🚫</div>
+          <h2 style="margin:0 0 0.5rem">This app is for mobile devices</h2>
+          <p style="color:#888;font-size:0.9rem;">Please use your phone to access Claude.<br>This browser appears to be inside the webtop container.</p>
+        </div>
+      </body>`;
+    throw new Error('Blocked: running inside webtop');
+  }
+})();
+
+// ============================
 // Remote Console Log Piping
 // ============================
 // Must be defined early so all subsequent console calls are captured
@@ -195,6 +218,7 @@ function setupEventListeners() {
 
   // PWA refresh
   refreshAppBtn.addEventListener('click', refreshApp);
+
 }
 
 // WebSocket
@@ -359,7 +383,7 @@ function handleServerMessage(data) {
       break;
 
     case 'sdk_event':
-      handleSdkEvent(data.event);
+      handleSdkEvent(data.event, data.timestamp);
       break;
 
     case 'query_completed':
@@ -410,7 +434,7 @@ function handleServerMessage(data) {
   }
 }
 
-function handleSdkEvent(event) {
+function handleSdkEvent(event, timestamp = null) {
   console.log('SDK event:', event);
 
   switch (event.type) {
@@ -422,7 +446,7 @@ function handleSdkEvent(event) {
       // First assistant message = Claude is responding, clear "Starting Claude..."
       clearMsgStatus();
       updateConnectionStatus('querying', 'responding');
-      handleAssistantMessage(event);
+      handleAssistantMessage(event, timestamp);
       break;
 
     case 'user':
@@ -467,12 +491,12 @@ function handleSystemEvent(event) {
   }
 }
 
-function handleAssistantMessage(event) {
+function handleAssistantMessage(event, timestamp = null) {
   const content = event.message.content;
 
   for (const block of content) {
     if (block.type === 'text') {
-      addMessage('assistant', block.text, null, true); // Enable markdown
+      addMessage('assistant', block.text, null, true, timestamp); // Enable markdown
     } else if (block.type === 'tool_use') {
       addToolUse(block);
     }
@@ -490,11 +514,12 @@ function handleResultMessage(event) {
 }
 
 // Message rendering
-function addMessage(role, content, status = null, useMarkdown = false) {
+function addMessage(role, content, status = null, useMarkdown = false, timestamp = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message';
 
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const date = timestamp ? new Date(timestamp) : new Date();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   let statusClass = '';
   if (status === 'error') statusClass = 'error';
@@ -520,11 +545,12 @@ function addMessage(role, content, status = null, useMarkdown = false) {
   scrollToBottom();
 }
 
-function addSystemMessage(htmlContent) {
+function addSystemMessage(htmlContent, timestamp = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message';
 
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const date = timestamp ? new Date(timestamp) : new Date();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   messageDiv.innerHTML = `
     <div class="message-header">
@@ -724,8 +750,9 @@ async function selectSession(sessionId) {
 
 async function loadSessionHistory(sessionId, seq = null) {
   try {
-    const response = await fetch(`/api/sessions/${sessionId}/messages`);
-    const data = await response.json();
+    // Try loading from new sdk_events endpoint first
+    const eventsRes = await fetch(`/api/sessions/${sessionId}/events`);
+    const eventsData = await eventsRes.json();
 
     // Batch 3: bail if the user switched sessions while we were fetching
     if (seq !== null && seq !== selectSessionSeq) {
@@ -734,19 +761,144 @@ async function loadSessionHistory(sessionId, seq = null) {
     }
 
     // Restore SDK session ID for resumption
+    if (eventsData.sdkSessionId) {
+      currentSdkSessionId = eventsData.sdkSessionId;
+    }
+
+    if (eventsData.events && eventsData.events.length > 0) {
+      _suppressAutoScroll = true;
+      renderPersistedEvents(eventsData.events);
+      _suppressAutoScroll = false;
+      scrollToBottomInstant();
+      return;
+    }
+
+    // Fallback: load from old messages endpoint (for pre-migration sessions)
+    const response = await fetch(`/api/sessions/${sessionId}/messages`);
+    const data = await response.json();
+
+    if (seq !== null && seq !== selectSessionSeq) {
+      console.log('Stale session history response — user switched sessions');
+      return;
+    }
+
     if (data.sdkSessionId) {
       currentSdkSessionId = data.sdkSessionId;
     }
 
-    // Render historical messages
     if (data.messages && data.messages.length > 0) {
+      _suppressAutoScroll = true;
       data.messages.forEach(msg => {
-        addMessage(msg.role, msg.content, msg.status, msg.useMarkdown);
+        addMessage(msg.role, msg.content, msg.status, msg.useMarkdown, msg.timestamp);
       });
+      _suppressAutoScroll = false;
+      scrollToBottomInstant();
     }
   } catch (error) {
     console.error('Failed to load session history:', error);
   }
+}
+
+// Render persisted SDK events from the events API
+function renderPersistedEvents(events) {
+  for (const evt of events) {
+    const event = evt.event_data;
+    const ts = evt.timestamp;
+
+    switch (evt.event_type) {
+      case 'user':
+        if (event.message) {
+          const content = typeof event.message.content === 'string'
+            ? event.message.content
+            : (Array.isArray(event.message.content)
+              ? event.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+              : String(event.message.content));
+          if (content) {
+            addMessage('user', content, null, false, ts);
+          }
+        }
+        break;
+
+      case 'assistant':
+        if (event.message && event.message.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'text') {
+              addMessage('assistant', block.text, null, true, ts);
+            } else if (block.type === 'tool_use') {
+              addToolUse(block);
+            } else if (block.type === 'tool_result') {
+              addToolResult(block);
+            }
+          }
+        }
+        break;
+
+      case 'result':
+        if (event.subtype === 'success') {
+          const stats = `<span style="font-size:0.7rem;color:var(--text-tertiary)">${event.num_turns} turns · $${event.total_cost_usd?.toFixed(4) || '?'} · ${event.usage?.input_tokens || '?'}↓ ${event.usage?.output_tokens || '?'}↑</span>`;
+          addSystemMessage(stats, ts);
+        } else if (event.subtype && event.subtype.startsWith('error_')) {
+          const errorMsg = event.errors?.join('\n') || 'Unknown error';
+          addMessage('system', `Error: ${errorMsg}`, 'error', false, ts);
+        }
+        break;
+
+      case 'system':
+        if (event.subtype === 'init' && event.session_id) {
+          currentSdkSessionId = event.session_id;
+          if (event.mcp_servers && event.mcp_servers.length > 0) {
+            const statusHtml = '<div class="mcp-status-bar">' +
+              event.mcp_servers.map(server => {
+                const dotClass = server.status === 'connected' ? '' : (server.status === 'connecting' ? 'pending' : 'error');
+                return `<span class="mcp-status-item"><span class="status-dot ${dotClass}"></span>${escapeHtml(server.name)}</span>`;
+              }).join('') +
+              '</div>';
+            addSystemMessage(statusHtml, ts);
+          }
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+}
+
+// Render a tool result block (from persisted events)
+function addToolResult(block) {
+  const resultDiv = document.createElement('div');
+  resultDiv.className = 'tool-block tool-result-block';
+
+  let resultContent = '';
+  if (block.content) {
+    if (typeof block.content === 'string') {
+      resultContent = block.content;
+    } else if (Array.isArray(block.content)) {
+      resultContent = block.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('\n');
+    }
+  }
+
+  const displayContent = resultContent.length > 500
+    ? resultContent.substring(0, 500) + '... (truncated)'
+    : resultContent;
+
+  resultDiv.innerHTML = `
+    <div class="tool-header">
+      <span class="tool-icon">${block.is_error ? '❌' : '✅'}</span>
+      <span class="tool-name">Result${block.is_error ? ' (error)' : ''}</span>
+      <span class="tool-expand-icon">▼</span>
+    </div>
+    <div class="tool-content">${escapeHtml(displayContent)}</div>
+  `;
+
+  resultDiv.querySelector('.tool-header').addEventListener('click', () => {
+    resultDiv.classList.toggle('expanded');
+  });
+
+  messages.appendChild(resultDiv);
 }
 
 function startSession(sessionId) {
@@ -896,10 +1048,33 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// ---- Smart scroll helpers ----
+// When true, scrollToBottom() becomes a no-op.
+// Used during bulk history loading so we don't scroll on every message.
+let _suppressAutoScroll = false;
+
+// Threshold (px) — if the user is within this distance of the bottom
+// we consider them "anchored" and will auto-scroll on new content.
+const SCROLL_ANCHOR_THRESHOLD = 150;
+
+function isUserNearBottom() {
+  const { scrollTop, scrollHeight, clientHeight } = messages;
+  return scrollHeight - scrollTop - clientHeight <= SCROLL_ANCHOR_THRESHOLD;
+}
+
 function scrollToBottom() {
-  requestAnimationFrame(() => {
-    messages.scrollTop = messages.scrollHeight;
-  });
+  if (_suppressAutoScroll) return;
+  if (isUserNearBottom()) {
+    requestAnimationFrame(() => {
+      messages.scrollTop = messages.scrollHeight;
+    });
+  }
+  // Otherwise do nothing — user is reading history, don't yank them away.
+}
+
+// Jump to bottom instantly & unconditionally (e.g. after loading history).
+function scrollToBottomInstant() {
+  messages.scrollTop = messages.scrollHeight;
 }
 
 // ============================
@@ -2132,3 +2307,406 @@ function formatFileSize(bytes) {
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
+
+// ============================
+// Scheduled Tasks Management
+// ============================
+
+const taskEditorModal = document.getElementById('taskEditorModal');
+const taskRunsModal = document.getElementById('taskRunsModal');
+const taskList = document.getElementById('taskList');
+const newTaskBtn = document.getElementById('newTaskBtn');
+
+let scheduledTasks = [];
+let editingTaskId = null; // null = creating new task
+
+// Initialize task management
+async function loadTasks() {
+  try {
+    const res = await fetch('/api/tasks');
+    scheduledTasks = await res.json();
+    renderTaskList();
+  } catch (e) {
+    console.error('Failed to load tasks:', e);
+  }
+}
+
+function renderTaskList() {
+  if (!taskList) return;
+
+  if (scheduledTasks.length === 0) {
+    taskList.innerHTML = '<div class="task-list-empty">No scheduled tasks</div>';
+    return;
+  }
+
+  taskList.innerHTML = scheduledTasks.map(task => {
+    const dotClass = task.enabled ? 'enabled' : 'disabled';
+    const typeIcon = task.type === 'webhook' ? '🔗' : '⏰';
+    return `
+      <div class="task-list-item" data-id="${task.id}">
+        <span class="task-status-dot ${dotClass}"></span>
+        <span class="task-item-name">${typeIcon} ${escapeHtml(task.name)}</span>
+      </div>`;
+  }).join('');
+
+  taskList.querySelectorAll('.task-list-item').forEach(el => {
+    el.addEventListener('click', () => openTaskEditor(el.dataset.id));
+  });
+}
+
+// Task Editor
+if (newTaskBtn) {
+  newTaskBtn.addEventListener('click', () => openTaskEditor(null));
+}
+
+function openTaskEditor(taskId) {
+  editingTaskId = taskId;
+  const modal = taskEditorModal;
+  if (!modal) return;
+
+  const title = document.getElementById('taskEditorTitle');
+  const nameInput = document.getElementById('teTaskName');
+  const cronExpr = document.getElementById('teCronExpr');
+  const timezone = document.getElementById('teTimezone');
+  const webhookPath = document.getElementById('teWebhookPath');
+  const webhookSecret = document.getElementById('teWebhookSecret');
+  const prompt = document.getElementById('tePrompt');
+  const sessionId = document.getElementById('teSessionId');
+  const model = document.getElementById('teModel');
+  const maxTurns = document.getElementById('teMaxTurns');
+  const maxBudget = document.getElementById('teMaxBudget');
+  const enabled = document.getElementById('teEnabled');
+  const deleteBtn = document.getElementById('teDeleteBtn');
+  const runNowBtn = document.getElementById('teRunNowBtn');
+  const viewRunsBtn = document.getElementById('teViewRunsBtn');
+
+  // Populate session dropdown
+  sessionId.innerHTML = '<option value="">Select a session...</option>' +
+    sessions.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+
+  if (taskId) {
+    // Editing existing task
+    const task = scheduledTasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    title.textContent = 'Edit Task';
+    nameInput.value = task.name;
+    cronExpr.value = task.cron_expression || '';
+    timezone.value = task.timezone || 'UTC';
+    webhookPath.value = task.webhook_path || '';
+    webhookSecret.value = task.webhook_secret || '';
+    prompt.value = task.prompt;
+    sessionId.value = task.session_id || '';
+    model.value = task.model || 'sonnet';
+    maxTurns.value = task.max_turns || 10;
+    maxBudget.value = task.max_budget_usd || 5.0;
+    enabled.checked = !!task.enabled;
+
+    // Set type toggle
+    setToggle('cron', 'webhook', task.type === 'webhook');
+    // Set mode toggle
+    setToggle('new', 'reuse', task.session_mode === 'reuse');
+
+    deleteBtn.style.display = 'block';
+    runNowBtn.style.display = 'block';
+    viewRunsBtn.style.display = 'block';
+  } else {
+    // Creating new task
+    title.textContent = 'New Task';
+    nameInput.value = '';
+    cronExpr.value = '';
+    timezone.value = 'Europe/London';
+    webhookPath.value = '';
+    webhookSecret.value = '';
+    prompt.value = '';
+    sessionId.value = '';
+    model.value = 'opus';
+    maxTurns.value = 0;
+    maxBudget.value = 0;
+    enabled.checked = true;
+
+    setToggle('cron', 'webhook', false);
+    setToggle('new', 'reuse', false);
+
+    deleteBtn.style.display = 'none';
+    runNowBtn.style.display = 'none';
+    viewRunsBtn.style.display = 'none';
+  }
+
+  updateTaskEditorVisibility();
+  modal.style.display = 'flex';
+  sidebar.classList.remove('open');
+}
+
+function setToggle(val1, val2, isSecond) {
+  const btn1Map = {
+    'cron': document.getElementById('teTypeCron'),
+    'new': document.getElementById('teModeNew'),
+  };
+  const btn2Map = {
+    'webhook': document.getElementById('teTypeWebhook'),
+    'reuse': document.getElementById('teModeReuse'),
+  };
+
+  const b1 = btn1Map[val1];
+  const b2 = btn2Map[val2];
+  if (b1 && b2) {
+    b1.classList.toggle('active', !isSecond);
+    b2.classList.toggle('active', isSecond);
+  }
+}
+
+function updateTaskEditorVisibility() {
+  const isCron = document.getElementById('teTypeCron')?.classList.contains('active');
+  const isReuse = document.getElementById('teModeReuse')?.classList.contains('active');
+
+  document.querySelectorAll('.te-cron-fields').forEach(el => {
+    el.style.display = isCron ? 'flex' : 'none';
+  });
+  document.querySelectorAll('.te-webhook-fields').forEach(el => {
+    el.style.display = isCron ? 'none' : 'flex';
+  });
+  document.querySelectorAll('.te-reuse-fields').forEach(el => {
+    el.style.display = isReuse ? 'flex' : 'none';
+  });
+
+  // Update webhook URL hint
+  const webhookUrl = document.getElementById('teWebhookUrl');
+  const webhookPath = document.getElementById('teWebhookPath');
+  if (webhookUrl && webhookPath) {
+    const path = webhookPath.value || '<path>';
+    webhookUrl.textContent = `${window.location.origin}/hook/${path}`;
+  }
+}
+
+// Toggle button event handlers
+document.getElementById('teTypeCron')?.addEventListener('click', () => {
+  setToggle('cron', 'webhook', false);
+  updateTaskEditorVisibility();
+});
+document.getElementById('teTypeWebhook')?.addEventListener('click', () => {
+  setToggle('cron', 'webhook', true);
+  updateTaskEditorVisibility();
+});
+document.getElementById('teModeNew')?.addEventListener('click', () => {
+  setToggle('new', 'reuse', false);
+  updateTaskEditorVisibility();
+});
+document.getElementById('teModeReuse')?.addEventListener('click', () => {
+  setToggle('new', 'reuse', true);
+  updateTaskEditorVisibility();
+});
+
+// Webhook path change updates URL hint
+document.getElementById('teWebhookPath')?.addEventListener('input', updateTaskEditorVisibility);
+
+// AI Cron Expression Generator
+const cronAiBtn = document.getElementById('teCronAiBtn');
+const cronAiInput = document.getElementById('teCronAiInput');
+const cronAiPrompt = document.getElementById('teCronAiPrompt');
+const cronAiGenerate = document.getElementById('teCronAiGenerate');
+
+cronAiBtn?.addEventListener('click', () => {
+  const isOpen = cronAiInput.style.display !== 'none';
+  cronAiInput.style.display = isOpen ? 'none' : 'flex';
+  if (!isOpen) {
+    cronAiPrompt.focus();
+  }
+});
+
+async function generateCronExpression() {
+  const desc = cronAiPrompt.value.trim();
+  if (!desc) return;
+
+  cronAiBtn.classList.add('loading');
+  cronAiGenerate.disabled = true;
+  cronAiGenerate.textContent = '...';
+
+  try {
+    const res = await fetch('/api/generate-cron', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: desc }),
+    });
+    const data = await res.json();
+
+    if (data.cron) {
+      document.getElementById('teCronExpr').value = data.cron;
+      cronAiInput.style.display = 'none';
+      cronAiPrompt.value = '';
+      showToast(`Generated: ${data.cron}`, 3000);
+    } else {
+      showToast('Failed to generate cron expression', 3000);
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 3000);
+  } finally {
+    cronAiBtn.classList.remove('loading');
+    cronAiGenerate.disabled = false;
+    cronAiGenerate.textContent = 'Go';
+  }
+}
+
+cronAiGenerate?.addEventListener('click', generateCronExpression);
+cronAiPrompt?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    generateCronExpression();
+  }
+});
+
+// Close button
+document.getElementById('taskEditorClose')?.addEventListener('click', () => {
+  taskEditorModal.style.display = 'none';
+});
+
+// Save button
+document.getElementById('teSaveBtn')?.addEventListener('click', async () => {
+  const name = document.getElementById('teTaskName').value.trim();
+  const prompt = document.getElementById('tePrompt').value.trim();
+
+  if (!name) { alert('Name is required'); return; }
+  if (!prompt) { alert('Prompt is required'); return; }
+
+  const isCron = document.getElementById('teTypeCron')?.classList.contains('active');
+  const isReuse = document.getElementById('teModeReuse')?.classList.contains('active');
+
+  const payload = {
+    name,
+    type: isCron ? 'cron' : 'webhook',
+    cron_expression: isCron ? document.getElementById('teCronExpr').value.trim() : null,
+    timezone: document.getElementById('teTimezone').value,
+    prompt,
+    session_mode: isReuse ? 'reuse' : 'new',
+    session_id: isReuse ? document.getElementById('teSessionId').value : null,
+    webhook_path: !isCron ? document.getElementById('teWebhookPath').value.trim() : null,
+    webhook_secret: !isCron ? document.getElementById('teWebhookSecret').value.trim() : null,
+    enabled: document.getElementById('teEnabled').checked,
+    model: document.getElementById('teModel').value,
+    max_turns: parseInt(document.getElementById('teMaxTurns').value) || 0,
+    max_budget_usd: parseFloat(document.getElementById('teMaxBudget').value) || 0,
+  };
+
+  try {
+    if (editingTaskId) {
+      await fetch(`/api/tasks/${editingTaskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      showToast('Task updated', 2000);
+    } else {
+      await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      showToast('Task created', 2000);
+    }
+
+    taskEditorModal.style.display = 'none';
+    await loadTasks();
+  } catch (e) {
+    alert('Failed to save task: ' + e.message);
+  }
+});
+
+// Delete button
+document.getElementById('teDeleteBtn')?.addEventListener('click', async () => {
+  if (!editingTaskId) return;
+  if (!confirm('Delete this task?')) return;
+
+  try {
+    await fetch(`/api/tasks/${editingTaskId}`, { method: 'DELETE' });
+    showToast('Task deleted', 2000);
+    taskEditorModal.style.display = 'none';
+    await loadTasks();
+  } catch (e) {
+    alert('Failed to delete task: ' + e.message);
+  }
+});
+
+// Run Now button
+document.getElementById('teRunNowBtn')?.addEventListener('click', async () => {
+  if (!editingTaskId) return;
+  try {
+    await fetch(`/api/tasks/${editingTaskId}/run`, { method: 'POST' });
+    showToast('Task triggered', 2000);
+  } catch (e) {
+    alert('Failed to trigger task: ' + e.message);
+  }
+});
+
+// View Runs button
+document.getElementById('teViewRunsBtn')?.addEventListener('click', async () => {
+  if (!editingTaskId) return;
+  openTaskRuns(editingTaskId);
+});
+
+// Task Runs Modal
+async function openTaskRuns(taskId) {
+  const modal = taskRunsModal;
+  if (!modal) return;
+
+  const task = scheduledTasks.find(t => t.id === taskId);
+  const title = document.getElementById('taskRunsTitle');
+  const list = document.getElementById('taskRunsList');
+
+  title.textContent = task ? `Runs: ${task.name}` : 'Task Runs';
+  list.innerHTML = '<div class="task-list-empty">Loading...</div>';
+  modal.style.display = 'flex';
+
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/runs`);
+    const runs = await res.json();
+
+    if (runs.length === 0) {
+      list.innerHTML = '<div class="task-list-empty">No runs yet</div>';
+      return;
+    }
+
+    list.innerHTML = runs.map(run => {
+      const statusIcon = {
+        completed: '✅', failed: '❌', running: '⏳', interrupted: '⚠️'
+      }[run.status] || '❓';
+
+      const time = new Date(run.started_at).toLocaleString([], {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+
+      let detail = run.result_summary || run.error || run.status;
+      if (detail && detail.length > 60) detail = detail.substring(0, 60) + '...';
+
+      return `
+        <div class="task-run-item" data-session-id="${run.session_id || ''}">
+          <span class="task-run-status">${statusIcon}</span>
+          <div class="task-run-info">
+            <div class="task-run-time">${time}</div>
+            <div class="task-run-detail">${escapeHtml(detail)}</div>
+          </div>
+          <span class="task-run-trigger">${run.trigger_type}</span>
+        </div>`;
+    }).join('');
+
+    // Click run to navigate to session
+    list.querySelectorAll('.task-run-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const sessId = el.dataset.sessionId;
+        if (sessId) {
+          modal.style.display = 'none';
+          taskEditorModal.style.display = 'none';
+          selectSession(sessId);
+        }
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="task-list-empty">Error: ${e.message}</div>`;
+  }
+}
+
+document.getElementById('taskRunsClose')?.addEventListener('click', () => {
+  taskRunsModal.style.display = 'none';
+});
+
+// Load tasks on init
+loadTasks();
