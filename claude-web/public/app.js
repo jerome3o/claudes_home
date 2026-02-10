@@ -2753,5 +2753,246 @@ document.getElementById('taskRunsClose')?.addEventListener('click', () => {
   taskRunsModal.style.display = 'none';
 });
 
+// ============================
+// In-Chat Message Search
+// ============================
+
+const searchToggleBtn = document.getElementById('searchToggleBtn');
+const searchBar = document.getElementById('searchBar');
+const searchInput = document.getElementById('searchInput');
+const searchCounter = document.getElementById('searchCounter');
+const searchPrevBtn = document.getElementById('searchPrevBtn');
+const searchNextBtn = document.getElementById('searchNextBtn');
+const searchCloseBtn = document.getElementById('searchCloseBtn');
+
+let searchMatches = [];    // Array of <mark> elements
+let currentMatchIndex = -1;
+let searchDebounceTimer = null;
+let searchIsOpen = false;
+
+function toggleSearch() {
+  if (searchIsOpen) {
+    closeSearch();
+  } else {
+    openSearch();
+  }
+}
+
+function openSearch() {
+  searchIsOpen = true;
+  searchBar.style.display = 'flex';
+  searchInput.value = '';
+  searchCounter.textContent = '';
+  searchPrevBtn.disabled = true;
+  searchNextBtn.disabled = true;
+  // Auto-focus after display change
+  requestAnimationFrame(() => searchInput.focus());
+}
+
+function closeSearch() {
+  searchIsOpen = false;
+  searchBar.style.display = 'none';
+  searchInput.value = '';
+  searchCounter.textContent = '';
+  clearSearchHighlights();
+  searchMatches = [];
+  currentMatchIndex = -1;
+}
+
+function clearSearchHighlights() {
+  const marks = messages.querySelectorAll('mark.search-highlight, mark.search-highlight-current');
+  marks.forEach(mark => {
+    const parent = mark.parentNode;
+    if (!parent) return;
+    // Replace mark with its text content
+    const textNode = document.createTextNode(mark.textContent);
+    parent.replaceChild(textNode, mark);
+    // Merge adjacent text nodes to avoid fragmented DOM
+    parent.normalize();
+  });
+}
+
+function performSearch(query) {
+  // Clear previous highlights
+  clearSearchHighlights();
+  searchMatches = [];
+  currentMatchIndex = -1;
+
+  if (!query || query.length === 0) {
+    searchCounter.textContent = '';
+    searchPrevBtn.disabled = true;
+    searchNextBtn.disabled = true;
+    return;
+  }
+
+  const lowerQuery = query.toLowerCase();
+
+  // Walk all text nodes inside #messages using TreeWalker
+  const walker = document.createTreeWalker(
+    messages,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (node) => {
+        // Skip text nodes inside script, style, or the search bar itself
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+        // Only search visible text
+        if (node.textContent.trim().length === 0) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    textNodes.push(node);
+  }
+
+  // Process each text node — wrap matching substrings in <mark> tags
+  for (const textNode of textNodes) {
+    const text = textNode.textContent;
+    const lowerText = text.toLowerCase();
+    const indices = [];
+
+    // Find all occurrences in this text node
+    let startIdx = 0;
+    while (true) {
+      const idx = lowerText.indexOf(lowerQuery, startIdx);
+      if (idx === -1) break;
+      indices.push(idx);
+      startIdx = idx + lowerQuery.length;
+    }
+
+    if (indices.length === 0) continue;
+
+    // Build replacement fragment
+    const frag = document.createDocumentFragment();
+    let lastEnd = 0;
+
+    for (const idx of indices) {
+      // Text before match
+      if (idx > lastEnd) {
+        frag.appendChild(document.createTextNode(text.substring(lastEnd, idx)));
+      }
+
+      // The match wrapped in <mark>
+      const mark = document.createElement('mark');
+      mark.className = 'search-highlight';
+      mark.textContent = text.substring(idx, idx + query.length);
+      frag.appendChild(mark);
+      searchMatches.push(mark);
+
+      lastEnd = idx + query.length;
+    }
+
+    // Remaining text after last match
+    if (lastEnd < text.length) {
+      frag.appendChild(document.createTextNode(text.substring(lastEnd)));
+    }
+
+    // Replace the text node with our fragment
+    textNode.parentNode.replaceChild(frag, textNode);
+  }
+
+  // Update counter and buttons
+  updateSearchCounter();
+
+  if (searchMatches.length > 0) {
+    searchPrevBtn.disabled = false;
+    searchNextBtn.disabled = false;
+    // Navigate to first match
+    currentMatchIndex = 0;
+    highlightCurrentMatch();
+  } else {
+    searchPrevBtn.disabled = true;
+    searchNextBtn.disabled = true;
+  }
+}
+
+function highlightCurrentMatch() {
+  // Remove current highlight from all
+  searchMatches.forEach(m => {
+    m.className = 'search-highlight';
+  });
+
+  if (currentMatchIndex >= 0 && currentMatchIndex < searchMatches.length) {
+    const current = searchMatches[currentMatchIndex];
+    current.className = 'search-highlight-current';
+    current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  updateSearchCounter();
+}
+
+function navigateMatch(direction) {
+  if (searchMatches.length === 0) return;
+
+  if (direction === 'next') {
+    currentMatchIndex = (currentMatchIndex + 1) % searchMatches.length;
+  } else {
+    currentMatchIndex = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length;
+  }
+
+  highlightCurrentMatch();
+}
+
+function updateSearchCounter() {
+  if (searchMatches.length === 0) {
+    searchCounter.textContent = searchInput.value.length > 0 ? '0 of 0' : '';
+  } else {
+    searchCounter.textContent = `${currentMatchIndex + 1} of ${searchMatches.length}`;
+  }
+}
+
+// Wire up event listeners
+searchToggleBtn.addEventListener('click', toggleSearch);
+searchCloseBtn.addEventListener('click', closeSearch);
+searchPrevBtn.addEventListener('click', () => navigateMatch('prev'));
+searchNextBtn.addEventListener('click', () => navigateMatch('next'));
+
+// Debounced search input
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    performSearch(searchInput.value);
+  }, 150);
+});
+
+// Keyboard shortcuts in search input
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.shiftKey) {
+      navigateMatch('prev');
+    } else {
+      navigateMatch('next');
+    }
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  }
+});
+
+// Global keyboard shortcut: Ctrl/Cmd+F to open search
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    // Only intercept if we're not in a modal or file viewer
+    if (fvModal.style.display !== 'none') return;
+    if (mcpModal.classList.contains('open')) return;
+    if (taskEditorModal.style.display !== 'none') return;
+
+    e.preventDefault();
+    if (!searchIsOpen) {
+      openSearch();
+    } else {
+      searchInput.focus();
+      searchInput.select();
+    }
+  }
+});
+
 // Load tasks on init
 loadTasks();
