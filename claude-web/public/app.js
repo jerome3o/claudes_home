@@ -468,6 +468,19 @@ function handleServerMessage(data) {
     case 'session_notification':
       handleSessionNotification(data);
       break;
+
+    case 'session_renamed': {
+      // Update session name in sidebar and title when an agent renames itself
+      const renamedSession = sessions.find(s => s.id === data.sessionId);
+      if (renamedSession) {
+        renamedSession.name = data.name;
+        renderSessions();
+        if (data.sessionId === currentSessionId) {
+          sessionTitle.textContent = data.name;
+        }
+      }
+      break;
+    }
   }
 }
 

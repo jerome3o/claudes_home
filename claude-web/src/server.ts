@@ -595,6 +595,12 @@ app.patch('/api/sessions/:id', (req, res) => {
   }
   if (name) {
     stmts.renameSession.run(name, req.params.id);
+    // Broadcast rename to all connected clients so sidebar updates in real-time
+    broadcastToAll({
+      type: 'session_renamed',
+      sessionId: req.params.id,
+      name,
+    });
   }
   if (folder !== undefined) {
     stmts.updateSessionFolder.run(folder || null, req.params.id);
@@ -1879,6 +1885,33 @@ wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
           break;
         }
 
+        case 'rename_session': {
+          const { sessionId: renameId, name: newName } = message;
+          if (renameId && newName && typeof newName === 'string' && newName.trim().length > 0) {
+            const trimmedName = newName.trim();
+            stmts.renameSession.run(trimmedName, renameId);
+            console.log(`[rename] Session ${renameId} renamed to "${trimmedName}"`);
+            // Broadcast to all clients so sidebar updates in real-time
+            broadcastToAll({
+              type: 'session_renamed',
+              sessionId: renameId,
+              name: trimmedName,
+            });
+            ws.send(JSON.stringify({
+              type: 'session_renamed',
+              sessionId: renameId,
+              name: trimmedName,
+              success: true,
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'error',
+              error: 'rename_session requires a valid sessionId and non-empty name',
+            }));
+          }
+          break;
+        }
+
         default:
           console.log('Unknown message type:', message.type);
       }
@@ -1956,10 +1989,16 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     const mcpServers = loadMcpConfig();
 
     // Create query options
+    const sessionName = sessionData?.name || 'Unknown';
     const options: SDKOptions = {
       cwd: sessionCwd,
       env: getSpawnEnv(),
       mcpServers,
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: `\n\nYour identity: You are agent "${sessionName}" (session ID: ${sessionId}). You can use this information when communicating with other agents or when you need to identify yourself. You can rename yourself using: curl -X PATCH http://localhost:${PORT}/api/sessions/${sessionId} -H 'Content-Type: application/json' -d '{"name": "New Name"}'`,
+      },
       canUseTool: async (toolName, input) => ({
         behavior: 'allow',
         updatedInput: input,
@@ -2300,10 +2339,16 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
     const mcpServers = loadMcpConfig();
 
     // Create query options (0 = unlimited for turns/budget)
+    const taskSessionName = session?.name || task.name || 'Unknown';
     const options: SDKOptions = {
       cwd: sessionCwd,
       env: getSpawnEnv(),
       mcpServers,
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        append: `\n\nYour identity: You are agent "${taskSessionName}" (session ID: ${sessionId}). You can use this information when communicating with other agents or when you need to identify yourself. You can rename yourself using: curl -X PATCH http://localhost:${PORT}/api/sessions/${sessionId} -H 'Content-Type: application/json' -d '{"name": "New Name"}'`,
+      },
       ...(task.max_turns > 0 && { maxTurns: task.max_turns }),
       ...(task.max_budget_usd > 0 && { maxBudgetUsd: task.max_budget_usd }),
       ...(task.model && { model: task.model }),
@@ -2424,6 +2469,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
   // Load session for folder and SDK session ID
   const session = stmts.getSession.get(sessionId) as any;
   const sessionCwd = resolveSessionCwd(session?.folder);
+  const incomingSessionName = session?.name || 'Unknown';
 
   // Load MCP config and create query options
   const mcpServers = loadMcpConfig();
@@ -2431,6 +2477,11 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     cwd: sessionCwd,
     env: getSpawnEnv(),
     mcpServers,
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+      append: `\n\nYour identity: You are agent "${incomingSessionName}" (session ID: ${sessionId}). You can use this information when communicating with other agents or when you need to identify yourself. You can rename yourself using: curl -X PATCH http://localhost:${PORT}/api/sessions/${sessionId} -H 'Content-Type: application/json' -d '{"name": "New Name"}'`,
+    },
     canUseTool: async (toolName: string, input: any) => ({
       behavior: 'allow' as const,
       updatedInput: input,
