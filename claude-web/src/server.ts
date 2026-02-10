@@ -16,6 +16,26 @@ import Database from 'better-sqlite3';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/**
+ * Build environment variables for spawned Claude Code processes.
+ * Ensures the PATH includes the directory of the current Node.js binary
+ * so that `spawn("node", ...)` inside the SDK can always find it —
+ * even when the server runs in a restricted environment (e.g. systemd,
+ * Docker, cron) where PATH is minimal.
+ */
+function getSpawnEnv(): Record<string, string | undefined> {
+  const env = { ...process.env };
+  const nodeBinDir = dirname(process.execPath);
+  if (env.PATH) {
+    if (!env.PATH.split(':').includes(nodeBinDir)) {
+      env.PATH = `${nodeBinDir}:${env.PATH}`;
+    }
+  } else {
+    env.PATH = nodeBinDir;
+  }
+  return env;
+}
+
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 }); // 50MB max for image uploads
@@ -1922,6 +1942,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     // Create query options
     const options: SDKOptions = {
       cwd: sessionCwd,
+      env: getSpawnEnv(),
       mcpServers,
       canUseTool: async (toolName, input) => ({
         behavior: 'allow',
@@ -2265,6 +2286,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
     // Create query options (0 = unlimited for turns/budget)
     const options: SDKOptions = {
       cwd: sessionCwd,
+      env: getSpawnEnv(),
       mcpServers,
       ...(task.max_turns > 0 && { maxTurns: task.max_turns }),
       ...(task.max_budget_usd > 0 && { maxBudgetUsd: task.max_budget_usd }),
@@ -2391,6 +2413,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
   const mcpServers = loadMcpConfig();
   const options: SDKOptions = {
     cwd: sessionCwd,
+    env: getSpawnEnv(),
     mcpServers,
     canUseTool: async (toolName: string, input: any) => ({
       behavior: 'allow' as const,
