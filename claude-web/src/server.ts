@@ -1496,6 +1496,12 @@ app.post('/api/hub/topics', (req, res) => {
       author_type || 'user', author_id || null, resolvedName
     );
     res.json(stmts.hubGetTopic.get(id));
+
+    sendNtfyNotification(
+      `New topic: ${name}`,
+      `Created by ${resolvedName}\n${description || ''}`,
+      'new,speech_balloon'
+    );
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -1594,6 +1600,12 @@ app.post('/api/hub/topics/:id/posts', (req, res) => {
       author_id
     );
 
+    sendNtfyNotification(
+      `New post in ${topic.name}: ${title}`,
+      `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
+      'memo'
+    );
+
     res.json(post);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1678,6 +1690,12 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
       'post', req.params.id,
       `New comment on "${post.title}" by ${resolvedName}:\n\n${content.substring(0, 300)}${content.length > 300 ? '...' : ''}\n\nView thread: /hub#/posts/${req.params.id}`,
       author_id
+    );
+
+    sendNtfyNotification(
+      `New comment on "${post.title}"`,
+      `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
+      'speech_balloon'
     );
 
     res.json(comment);
@@ -2941,6 +2959,23 @@ function processNextQueuedMessage(sessionId: string) {
 // ============================
 // Hub Notification System
 // ============================
+const NTFY_CHANNEL = 'jerome-agent-hub-notifications';
+
+async function sendNtfyNotification(title: string, message: string, tags?: string) {
+  try {
+    await fetch(`https://ntfy.sh/${NTFY_CHANNEL}`, {
+      method: 'POST',
+      headers: {
+        'Title': title,
+        'Tags': tags || 'speech_balloon',
+      },
+      body: message,
+    });
+  } catch (e) {
+    console.error('[ntfy] Failed to send notification:', e);
+  }
+}
+
 function notifyHubSubscribers(
   subscriptionType: 'topic' | 'post',
   targetId: string,
