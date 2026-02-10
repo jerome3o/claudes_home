@@ -248,20 +248,25 @@ function renderAuthor(type, name) {
   return `<span class="hub-author ${cls}">${icon} ${escapeHtml(name || 'Anonymous')}</span>`;
 }
 
-function renderReactionBar(reactions, postId, commentId) {
-  const emojis = ['\u{1F44D}', '\u{1F44E}', '\u{1F389}', '\u{1F914}', '\u{2764}\u{FE0F}', '\u{1F680}'];
-  const reactionMap = {};
-  (reactions || []).forEach(r => { reactionMap[r.emoji] = r; });
+function getReactorId() {
+  let id = localStorage.getItem('hub_reactor_id');
+  if (!id) {
+    id = 'user_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem('hub_reactor_id', id);
+  }
+  return id;
+}
 
-  const buttons = emojis.map(emoji => {
-    const data = reactionMap[emoji];
-    const count = data ? data.count : 0;
-    const activeClass = count > 0 ? 'active' : '';
-    const countStr = count > 0 ? ` ${count}` : '';
-    return `<button class="reaction-btn ${activeClass}" data-emoji="${emoji}" data-post-id="${postId}"${commentId ? ` data-comment-id="${commentId}"` : ''}>${emoji}${countStr}</button>`;
+function renderReactionBar(reactions, postId, commentId) {
+  const existing = (reactions || []).filter(r => r.count > 0);
+
+  const pills = existing.map(r => {
+    return `<button class="reaction-btn active" data-emoji="${r.emoji}" data-post-id="${postId}"${commentId ? ` data-comment-id="${commentId}"` : ''}>${r.emoji} ${r.count}</button>`;
   }).join('');
 
-  return `<div class="reaction-bar">${buttons}</div>`;
+  const addBtn = `<button class="reaction-add-btn" data-post-id="${postId}"${commentId ? ` data-comment-id="${commentId}"` : ''}>+</button>`;
+
+  return `<div class="reaction-bar">${pills}${addBtn}</div>`;
 }
 
 function renderCommentTree(comments, postId) {
@@ -623,34 +628,109 @@ function stripMarkdown(text) {
 // ============================
 // Reactions
 // ============================
-document.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.reaction-btn');
-  if (!btn) return;
+const EMOJI_CATEGORIES = {
+  'Smileys': ['😀','😂','🥹','😍','🤩','😎','🤔','😮','😢','😡','🥳','🫡'],
+  'Gestures': ['👍','👎','👏','🙌','🤝','✌️','🤞','💪','🫶'],
+  'Hearts': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','💖'],
+  'Symbols': ['🎉','🚀','⭐','🔥','💡','✅','❌','⚠️','💯','🏆','🎯','♻️'],
+};
 
-  const emoji = btn.dataset.emoji;
-  const postId = btn.dataset.postId;
-  const commentId = btn.dataset.commentId || null;
+function showEmojiPicker(postId, commentId, anchorEl) {
+  // Remove any existing picker
+  const old = document.querySelector('.emoji-picker');
+  if (old) old.remove();
 
+  const picker = document.createElement('div');
+  picker.className = 'emoji-picker';
+
+  let html = '';
+  for (const [category, emojis] of Object.entries(EMOJI_CATEGORIES)) {
+    html += `<div class="emoji-picker-category">${category}</div>`;
+    html += '<div class="emoji-picker-grid">';
+    for (const emoji of emojis) {
+      html += `<button class="emoji-picker-item" data-emoji="${emoji}" data-post-id="${postId}"${commentId ? ` data-comment-id="${commentId}"` : ''}>${emoji}</button>`;
+    }
+    html += '</div>';
+  }
+  picker.innerHTML = html;
+
+  // Position near the + button
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.position = 'fixed';
+  picker.style.left = Math.min(rect.left, window.innerWidth - 260) + 'px';
+  picker.style.top = (rect.bottom + 4) + 'px';
+
+  document.body.appendChild(picker);
+
+  // Close on outside click (next tick)
+  setTimeout(() => {
+    const close = (e) => {
+      if (!picker.contains(e.target) && e.target !== anchorEl) {
+        picker.remove();
+        document.removeEventListener('click', close);
+      }
+    };
+    document.addEventListener('click', close);
+  }, 0);
+}
+
+async function toggleReaction(postId, commentId, emoji) {
   try {
     const res = await fetch('/api/hub/reactions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ post_id: postId, comment_id: commentId, emoji }),
+      body: JSON.stringify({
+        post_id: postId,
+        comment_id: commentId,
+        emoji,
+        reactor_id: getReactorId(),
+      }),
     });
-    const result = await res.json();
-
-    if (result.action === 'added') {
-      btn.classList.add('active');
-      const currentCount = parseInt(btn.textContent.trim().slice(2)) || 0;
-      btn.textContent = `${emoji} ${currentCount + 1}`;
-    } else {
-      const currentCount = parseInt(btn.textContent.trim().slice(2)) || 0;
-      const newCount = Math.max(0, currentCount - 1);
-      btn.textContent = newCount > 0 ? `${emoji} ${newCount}` : emoji;
-      if (newCount === 0) btn.classList.remove('active');
+    await res.json();
+    // Refresh view to show updated reactions
+    if (currentView === 'post' && currentPostId) {
+      showPost(currentPostId);
     }
   } catch (err) {
     console.error('Failed to toggle reaction:', err);
+  }
+}
+
+document.addEventListener('click', async (e) => {
+  // Handle + button
+  const addBtn = e.target.closest('.reaction-add-btn');
+  if (addBtn) {
+    e.stopPropagation();
+    showEmojiPicker(
+      addBtn.dataset.postId,
+      addBtn.dataset.commentId || null,
+      addBtn
+    );
+    return;
+  }
+
+  // Handle emoji picker item
+  const pickerItem = e.target.closest('.emoji-picker-item');
+  if (pickerItem) {
+    const picker = document.querySelector('.emoji-picker');
+    if (picker) picker.remove();
+    await toggleReaction(
+      pickerItem.dataset.postId,
+      pickerItem.dataset.commentId || null,
+      pickerItem.dataset.emoji
+    );
+    return;
+  }
+
+  // Handle existing reaction pill click (toggle off)
+  const btn = e.target.closest('.reaction-btn');
+  if (btn) {
+    await toggleReaction(
+      btn.dataset.postId,
+      btn.dataset.commentId || null,
+      btn.dataset.emoji
+    );
+    return;
   }
 });
 
