@@ -115,6 +115,7 @@ const vncHeader = document.querySelector('.vnc-header');
 const attachBtn = document.getElementById('attachBtn');
 const imageInput = document.getElementById('imageInput');
 const imagePreview = document.getElementById('imagePreview');
+const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const refreshAppBtn = document.getElementById('refreshAppBtn');
 const connDot = document.getElementById('connDot');
 const connLabel = document.getElementById('connLabel');
@@ -174,6 +175,9 @@ async function init() {
 function setupEventListeners() {
   menuBtn.addEventListener('click', () => sidebar.classList.add('open'));
   closeSidebar.addEventListener('click', () => sidebar.classList.remove('open'));
+
+  // Close sidebar when tapping/clicking the backdrop overlay (mobile)
+  sidebarBackdrop.addEventListener('click', () => sidebar.classList.remove('open'));
 
   const newSessionForm = document.getElementById('newSessionForm');
   const newSessionNameInput = document.getElementById('newSessionName');

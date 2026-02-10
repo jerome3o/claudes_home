@@ -78,6 +78,30 @@ body {
   .sidebar.open {
     transform: translateX(0);
   }
+
+  .sidebar.open ~ .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Sidebar backdrop overlay — only visible on mobile when sidebar is open */
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 999; /* just below sidebar (1000) */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 .sidebar-header {
