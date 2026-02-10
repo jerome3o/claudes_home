@@ -246,6 +246,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_hub_subs_session ON hub_subscriptions(session_id);
 `);
 
+// Add was_querying column for seamless restart support (idempotent)
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN was_querying INTEGER DEFAULT 0`);
+} catch (_e) {
+  // Column already exists — ignore
+}
+
 // Migrate from JSON if old sessions.json exists and DB is empty
 function migrateFromJson() {
   const sessionCount = (db.prepare('SELECT COUNT(*) as cnt FROM sessions').get() as any).cnt;
@@ -470,6 +477,10 @@ const stmts = {
   hubDeleteSubscription: db.prepare(
     'DELETE FROM hub_subscriptions WHERE session_id = ? AND subscription_type = ? AND target_id = ?'
   ),
+  // Seamless restart support
+  markSessionQuerying: db.prepare('UPDATE sessions SET was_querying = ? WHERE id = ?'),
+  clearAllQuerying: db.prepare('UPDATE sessions SET was_querying = 0'),
+  getQueryingSessions: db.prepare('SELECT id, name, sdkSessionId FROM sessions WHERE was_querying = 1 AND sdkSessionId IS NOT NULL'),
 };
 
 // Session interfaces (for type safety)
@@ -2885,10 +2896,109 @@ const eventPollInterval = setInterval(() => {
 // Process any overdue events immediately on startup
 processScheduledEvents().catch(e => console.error('[events] Startup processing error:', e));
 
+// ============================
+// Graceful Shutdown
+// ============================
+async function gracefulShutdown(signal: string) {
+  console.log(`[shutdown] Received ${signal}, starting graceful shutdown...`);
+
+  // 1. Mark all sessions with active queries for resurrection
+  for (const sessionId of activeQueries.keys()) {
+    stmts.markSessionQuerying.run(1, sessionId);
+    console.log(`[shutdown] Marked session ${sessionId} for resurrection`);
+  }
+
+  // 2. Close all active queries gracefully
+  for (const [sessionId, q] of activeQueries.entries()) {
+    try {
+      q.close();
+      console.log(`[shutdown] Closed query for session ${sessionId}`);
+    } catch (e) {
+      console.error(`[shutdown] Error closing query for ${sessionId}:`, e);
+    }
+  }
+  activeQueries.clear();
+
+  // 3. Stop cron jobs
+  for (const [taskId, job] of activeCronJobs.entries()) {
+    job.stop();
+    console.log(`[shutdown] Stopped cron job ${taskId}`);
+  }
+  activeCronJobs.clear();
+
+  // 4. Stop polling intervals
+  clearInterval(heartbeatInterval);
+  clearInterval(eventPollInterval);
+
+  // 5. Close WebSocket connections
+  wss.clients.forEach((ws) => {
+    ws.close(1012, 'Server restarting');
+  });
+
+  // 6. Close the HTTP server
+  server.close(() => {
+    console.log('[shutdown] HTTP server closed');
+    db.close();
+    console.log('[shutdown] Database closed');
+    process.exit(0);
+  });
+
+  // Force exit after 10 seconds if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('[shutdown] Forced exit after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ============================
+// Query Resurrection on Startup
+// ============================
+async function resurrectQueries() {
+  const sessions = stmts.getQueryingSessions.all() as any[];
+  if (sessions.length === 0) return;
+
+  console.log(`[resurrect] Found ${sessions.length} session(s) to resume`);
+
+  // Clear the was_querying flags now that we've read them
+  stmts.clearAllQuerying.run();
+
+  // Stagger resumptions to avoid overwhelming the system
+  for (let i = 0; i < sessions.length; i++) {
+    const session = sessions[i];
+    const delay = i * 2000; // 2 second stagger between each
+
+    setTimeout(() => {
+      console.log(`[resurrect] Resuming session "${session.name}" (${session.id})`);
+      processIncomingMessage(
+        session.id,
+        '[System] The server was restarted. You were in the middle of working on something. Please check your current state and continue where you left off. If you were implementing a feature, check what files you\'ve already modified and what still needs to be done.'
+      ).catch(e => {
+        console.error(`[resurrect] Failed to resume session ${session.id}:`, e);
+      });
+    }, delay);
+  }
+}
+
 // Start server
 const HOST = '0.0.0.0';
 server.listen(Number(PORT), HOST, () => {
   console.log(`Claude Web Frontend running on http://${HOST}:${PORT}`);
   console.log(`Accessible via Tailscale at http://100.110.255.35:${PORT}`);
   console.log(`Database: ${DB_FILE}`);
+
+  // Resurrect queries that were active before restart
+  resurrectQueries();
+
+  // Drain any pending queued messages from before restart
+  setTimeout(() => {
+    const allSessions = stmts.getAllSessions.all() as any[];
+    for (const session of allSessions) {
+      if (!activeQueries.has(session.id)) {
+        processNextQueuedMessage(session.id);
+      }
+    }
+  }, 5000); // Wait 5s for resurrections to start first
 });
