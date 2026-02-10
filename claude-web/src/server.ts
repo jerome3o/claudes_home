@@ -560,8 +560,9 @@ app.use(express.json());
 // API endpoints
 // ============================
 app.get('/api/sessions', (req, res) => {
-  const sessions = stmts.getAllSessions.all();
-  res.json(sessions);
+  const sessions = stmts.getAllSessions.all() as any[];
+  const enriched = sessions.map(s => ({ ...s, activeQuery: activeQueries.has(s.id) }));
+  res.json(enriched);
 });
 
 app.post('/api/sessions', (req, res) => {
@@ -1933,6 +1934,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       console.log(`[lifecycle] Closing existing query for session ${sessionId} before starting new one`);
       try { existingQuery.close(); } catch (e) { console.error('[lifecycle] Error closing existing query:', e); }
       activeQueries.delete(sessionId);
+      broadcastQueryState(sessionId, false);
     }
 
     // Save user message immediately (don't rely on SDK echo)
@@ -2007,6 +2009,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     // Create query
     const q = query({ prompt: queryPrompt, options });
     activeQueries.set(sessionId, q);
+    broadcastQueryState(sessionId, true);
 
     // Save user message as SDK event for persistence
     if (prompt) {
@@ -2062,6 +2065,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       });
     } finally {
       activeQueries.delete(sessionId);
+      broadcastQueryState(sessionId, false);
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -2072,6 +2076,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       error: error instanceof Error ? error.message : String(error),
     });
     activeQueries.delete(sessionId);
+    broadcastQueryState(sessionId, false);
   }
 }
 
@@ -2169,6 +2174,11 @@ function broadcastToAll(data: any) {
       ws.send(message);
     }
   });
+}
+
+// Broadcast query state changes to all clients (for sidebar activity indicators)
+function broadcastQueryState(sessionId: string, active: boolean) {
+  broadcastToAll({ type: 'session_query_state', sessionId, active });
 }
 
 function extractMessageContent(message: any): string {
@@ -2329,6 +2339,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
     // Run query
     const q = query({ prompt: fullPrompt, options });
     activeQueries.set(sessionId, q);
+    broadcastQueryState(sessionId, true);
 
     let turnIndex = 0;
     try {
@@ -2371,6 +2382,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       });
     } finally {
       activeQueries.delete(sessionId);
+      broadcastQueryState(sessionId, false);
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -2404,6 +2416,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     console.log(`[processIncomingMessage] Closing existing query for session ${sessionId}`);
     try { existingQuery.close(); } catch (e) { console.error('[processIncomingMessage] Error closing existing query:', e); }
     activeQueries.delete(sessionId);
+    broadcastQueryState(sessionId, false);
   }
 
   // Save user message
@@ -2443,6 +2456,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
 
   const q = query({ prompt: content, options });
   activeQueries.set(sessionId, q);
+  broadcastQueryState(sessionId, true);
 
   let turnIndex = 0;
   try {
@@ -2472,6 +2486,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     });
   } finally {
     activeQueries.delete(sessionId);
+    broadcastQueryState(sessionId, false);
     // Drain next queued message
     processNextQueuedMessage(sessionId);
   }
