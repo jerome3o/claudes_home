@@ -89,6 +89,16 @@ let lastPingTime = null; // Track last server ping
 let activeMsgStatus = null; // Current message status element (for ack/working/done)
 let sessionQueryStates = {}; // { sessionId: boolean } — tracks active queries per session
 
+// Pagination state
+const PAGE_SIZE = 50;
+let paginationState = {
+  totalCount: 0,
+  loadedCount: 0,
+  hasMore: false,
+  isLoadingMore: false,
+  useEvents: true, // whether the session uses events or legacy messages endpoint
+};
+
 // DOM elements
 const sidebar = document.getElementById('sidebar');
 const menuBtn = document.getElementById('menuBtn');
@@ -256,6 +266,13 @@ function setupEventListeners() {
 
   // PWA refresh
   refreshAppBtn.addEventListener('click', refreshApp);
+
+  // Infinite scroll — load older messages when scrolling near top
+  messages.addEventListener('scroll', () => {
+    if (messages.scrollTop < 200 && paginationState.hasMore && !paginationState.isLoadingMore) {
+      loadOlderMessages();
+    }
+  });
 
 }
 
@@ -828,32 +845,43 @@ async function selectSession(sessionId) {
 }
 
 async function loadSessionHistory(sessionId, seq = null) {
+  // Reset pagination state
+  paginationState = { totalCount: 0, loadedCount: 0, hasMore: false, isLoadingMore: false, useEvents: true };
+  removeLoadMoreIndicator();
+
   try {
-    // Try loading from new sdk_events endpoint first
-    const eventsRes = await fetch(`/api/sessions/${sessionId}/events`);
+    // Try loading from new sdk_events endpoint first (with pagination)
+    const eventsRes = await fetch(`/api/sessions/${sessionId}/events?limit=${PAGE_SIZE}`);
     const eventsData = await eventsRes.json();
 
-    // Batch 3: bail if the user switched sessions while we were fetching
     if (seq !== null && seq !== selectSessionSeq) {
       console.log('Stale session history response — user switched sessions');
       return;
     }
 
-    // Restore SDK session ID for resumption
     if (eventsData.sdkSessionId) {
       currentSdkSessionId = eventsData.sdkSessionId;
     }
 
     if (eventsData.events && eventsData.events.length > 0) {
+      paginationState.useEvents = true;
+      paginationState.totalCount = eventsData.total_count || eventsData.events.length;
+      paginationState.loadedCount = eventsData.events.length;
+      paginationState.hasMore = eventsData.has_more || false;
+
       _suppressAutoScroll = true;
       renderPersistedEvents(eventsData.events);
       _suppressAutoScroll = false;
       scrollToBottomInstant();
+
+      if (paginationState.hasMore) {
+        showLoadMoreIndicator();
+      }
       return;
     }
 
     // Fallback: load from old messages endpoint (for pre-migration sessions)
-    const response = await fetch(`/api/sessions/${sessionId}/messages`);
+    const response = await fetch(`/api/sessions/${sessionId}/messages?limit=${PAGE_SIZE}`);
     const data = await response.json();
 
     if (seq !== null && seq !== selectSessionSeq) {
@@ -866,16 +894,223 @@ async function loadSessionHistory(sessionId, seq = null) {
     }
 
     if (data.messages && data.messages.length > 0) {
+      paginationState.useEvents = false;
+      paginationState.totalCount = data.total_count || data.messages.length;
+      paginationState.loadedCount = data.messages.length;
+      paginationState.hasMore = data.has_more || false;
+
       _suppressAutoScroll = true;
       data.messages.forEach(msg => {
         addMessage(msg.role, msg.content, msg.status, msg.useMarkdown, msg.timestamp);
       });
       _suppressAutoScroll = false;
       scrollToBottomInstant();
+
+      if (paginationState.hasMore) {
+        showLoadMoreIndicator();
+      }
     }
   } catch (error) {
     console.error('Failed to load session history:', error);
   }
+}
+
+// Load older messages when scrolling up (pagination)
+async function loadOlderMessages() {
+  if (!currentSessionId || paginationState.isLoadingMore || !paginationState.hasMore) return;
+
+  paginationState.isLoadingMore = true;
+  const indicator = messages.querySelector('.load-more-indicator');
+  if (indicator) indicator.textContent = 'Loading older messages...';
+
+  // Calculate offset: we need to load the batch BEFORE what we already have
+  // totalCount - loadedCount gives us how many older messages exist
+  // We want to load from the end of the remaining older messages
+  const remaining = paginationState.totalCount - paginationState.loadedCount;
+  const batchSize = Math.min(PAGE_SIZE, remaining);
+  const offset = remaining - batchSize;
+
+  try {
+    const endpoint = paginationState.useEvents ? 'events' : 'messages';
+    const res = await fetch(`/api/sessions/${currentSessionId}/${endpoint}?limit=${batchSize}&offset=${offset}`);
+    const data = await res.json();
+
+    // Bail if user switched sessions
+    if (!currentSessionId) return;
+
+    // Save scroll position before prepending
+    const prevScrollHeight = messages.scrollHeight;
+    const prevScrollTop = messages.scrollTop;
+
+    _suppressAutoScroll = true;
+
+    // Create a document fragment to batch-prepend
+    const fragment = document.createDocumentFragment();
+
+    if (paginationState.useEvents && data.events) {
+      // Render events into fragment by temporarily swapping the messages container
+      const tempContainer = document.createElement('div');
+      const realContainer = messages;
+      // Temporarily replace messages reference isn't possible since it's const,
+      // so we render then move nodes
+      renderPersistedEventsInto(data.events, tempContainer);
+      while (tempContainer.firstChild) {
+        fragment.appendChild(tempContainer.firstChild);
+      }
+      paginationState.loadedCount += data.events.length;
+    } else if (data.messages) {
+      data.messages.forEach(msg => {
+        const messageDiv = createMessageElement(msg.role, msg.content, msg.status, msg.useMarkdown, msg.timestamp);
+        fragment.appendChild(messageDiv);
+      });
+      paginationState.loadedCount += data.messages.length;
+    }
+
+    // Insert older messages at the top (after the load-more indicator if present)
+    const firstMessage = messages.querySelector('.message, .tool-block');
+    if (firstMessage) {
+      messages.insertBefore(fragment, firstMessage);
+    } else {
+      messages.appendChild(fragment);
+    }
+
+    _suppressAutoScroll = false;
+
+    // Restore scroll position so it doesn't jump
+    const newScrollHeight = messages.scrollHeight;
+    messages.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+
+    // Update pagination state
+    paginationState.hasMore = offset > 0;
+
+    if (!paginationState.hasMore) {
+      removeLoadMoreIndicator();
+    } else if (indicator) {
+      indicator.textContent = 'Scroll up for older messages';
+    }
+  } catch (error) {
+    console.error('Failed to load older messages:', error);
+    if (indicator) indicator.textContent = 'Failed to load — scroll up to retry';
+  } finally {
+    paginationState.isLoadingMore = false;
+  }
+}
+
+function showLoadMoreIndicator() {
+  removeLoadMoreIndicator();
+  const indicator = document.createElement('div');
+  indicator.className = 'load-more-indicator';
+  indicator.textContent = 'Scroll up for older messages';
+  messages.prepend(indicator);
+}
+
+function removeLoadMoreIndicator() {
+  const existing = messages.querySelector('.load-more-indicator');
+  if (existing) existing.remove();
+}
+
+// Create a message DOM element without appending it (used by pagination)
+function createMessageElement(role, content, status = null, useMarkdown = false, timestamp = null) {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message';
+
+  const date = timestamp ? new Date(timestamp) : new Date();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  let statusClass = '';
+  if (status === 'error') statusClass = 'error';
+  else if (status === 'success') statusClass = 'success';
+
+  let contentHtml;
+  if (useMarkdown && typeof marked !== 'undefined') {
+    contentHtml = marked.parse(content, { breaks: true });
+  } else {
+    contentHtml = escapeHtml(content);
+  }
+
+  messageDiv.innerHTML = `
+    <div class="message-header">
+      <span class="message-role ${role} ${statusClass}">${role}</span>
+      <span class="message-time">${time}</span>
+    </div>
+    <div class="message-content">${contentHtml}</div>
+  `;
+
+  return messageDiv;
+}
+
+// Render persisted events into a target container (for pagination prepend)
+function renderPersistedEventsInto(events, container) {
+  for (const evt of events) {
+    const event = evt.event_data;
+    const ts = evt.timestamp;
+
+    switch (evt.event_type) {
+      case 'user':
+        if (event.message) {
+          const content = typeof event.message.content === 'string'
+            ? event.message.content
+            : (Array.isArray(event.message.content)
+              ? event.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+              : String(event.message.content));
+          if (content) {
+            container.appendChild(createMessageElement('user', content, null, false, ts));
+          }
+        }
+        break;
+
+      case 'assistant':
+        if (event.message && event.message.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'text') {
+              container.appendChild(createMessageElement('assistant', block.text, null, true, ts));
+            } else if (block.type === 'tool_use') {
+              container.appendChild(createToolUseElement(block));
+            }
+          }
+        }
+        break;
+
+      case 'result':
+        if (event.subtype === 'success') {
+          const stats = `<span style="font-size:0.7rem;color:var(--text-tertiary)">${event.num_turns} turns · $${event.total_cost_usd?.toFixed(4) || '?'} · ${event.usage?.input_tokens || '?'}↓ ${event.usage?.output_tokens || '?'}↑</span>`;
+          const msgDiv = document.createElement('div');
+          msgDiv.className = 'message';
+          const date = ts ? new Date(ts) : new Date();
+          const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          msgDiv.innerHTML = `<div class="message-header"><span class="message-role system">system</span><span class="message-time">${time}</span></div><div class="message-content">${stats}</div>`;
+          container.appendChild(msgDiv);
+        } else if (event.subtype && event.subtype.startsWith('error_')) {
+          const errorMsg = event.error || event.subtype;
+          container.appendChild(createMessageElement('system', `Error: ${errorMsg}`, 'error', false, ts));
+        }
+        break;
+    }
+  }
+}
+
+// Create a tool-use DOM element without appending (for pagination prepend)
+function createToolUseElement(toolUse) {
+  const toolDiv = document.createElement('div');
+  toolDiv.className = 'tool-block';
+  toolDiv.dataset.toolId = toolUse.id;
+
+  const inputJson = JSON.stringify(toolUse.input, null, 2);
+
+  toolDiv.innerHTML = `
+    <div class="tool-header">
+      <span class="tool-icon">🔧</span>
+      <span class="tool-name">${escapeHtml(toolUse.name)}</span>
+      <span class="tool-expand-icon">▼</span>
+    </div>
+    <div class="tool-content">${escapeHtml(inputJson)}</div>
+  `;
+
+  toolDiv.querySelector('.tool-header').addEventListener('click', () => {
+    toolDiv.classList.toggle('expanded');
+  });
+
+  return toolDiv;
 }
 
 // Render persisted SDK events from the events API

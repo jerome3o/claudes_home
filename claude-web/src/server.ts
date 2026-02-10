@@ -368,6 +368,12 @@ const stmts = {
   getMessages: db.prepare(
     'SELECT role, content, timestamp, useMarkdown, status FROM messages WHERE session_id = ? ORDER BY timestamp ASC'
   ),
+  getMessagesPaginated: db.prepare(
+    'SELECT role, content, timestamp, useMarkdown, status FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?'
+  ),
+  getMessagesTail: db.prepare(
+    'SELECT * FROM (SELECT role, content, timestamp, useMarkdown, status FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC'
+  ),
   insertMessage: db.prepare(
     'INSERT INTO messages (session_id, role, content, timestamp, useMarkdown, status) VALUES (?, ?, ?, ?, ?, ?)'
   ),
@@ -378,6 +384,12 @@ const stmts = {
   ),
   getSdkEvents: db.prepare(
     'SELECT event_type, event_data, turn_index, timestamp FROM sdk_events WHERE session_id = ? ORDER BY timestamp ASC, id ASC'
+  ),
+  getSdkEventsPaginated: db.prepare(
+    'SELECT event_type, event_data, turn_index, timestamp FROM sdk_events WHERE session_id = ? ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?'
+  ),
+  getSdkEventsTail: db.prepare(
+    'SELECT * FROM (SELECT event_type, event_data, turn_index, timestamp, id FROM sdk_events WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ),
   getSdkEventCount: db.prepare('SELECT COUNT(*) as cnt FROM sdk_events WHERE session_id = ?'),
   // Scheduled tasks
@@ -1044,24 +1056,37 @@ app.post('/api/sessions/:id/messages', (req, res) => {
   res.json({ success: true, deduplicated: false });
 });
 
-// Get session messages (for loading history)
+// Get session messages (for loading history) — supports pagination
 app.get('/api/sessions/:id/messages', (req, res) => {
   const session = stmts.getSession.get(req.params.id) as any;
 
   if (session) {
-    const messages = stmts.getMessages.all(req.params.id) as SessionMessage[];
-    // Convert useMarkdown from integer to boolean for client
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 0;
+    const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : 0;
+    const total_count = (stmts.getMessageCount.get(req.params.id) as any).cnt;
+
+    let messages: SessionMessage[];
+    if (limit > 0 && offset === 0 && total_count > limit) {
+      // Initial load: get the last N messages efficiently
+      messages = stmts.getMessagesTail.all(req.params.id, limit) as SessionMessage[];
+    } else if (limit > 0) {
+      messages = stmts.getMessagesPaginated.all(req.params.id, limit, offset) as SessionMessage[];
+    } else {
+      messages = stmts.getMessages.all(req.params.id) as SessionMessage[];
+    }
+
     const formatted = messages.map(m => ({
       ...m,
       useMarkdown: !!m.useMarkdown,
     }));
-    res.json({ messages: formatted, sdkSessionId: session.sdkSessionId });
+    const has_more = limit > 0 ? (offset + limit < total_count) : false;
+    res.json({ messages: formatted, sdkSessionId: session.sdkSessionId, total_count, has_more });
   } else {
     res.status(404).json({ error: 'Session not found' });
   }
 });
 
-// Get session SDK events (new persistence format)
+// Get session SDK events (new persistence format) — supports pagination
 app.get('/api/sessions/:id/events', (req, res) => {
   const session = stmts.getSession.get(req.params.id) as any;
   if (!session) {
@@ -1069,7 +1094,20 @@ app.get('/api/sessions/:id/events', (req, res) => {
     return;
   }
 
-  const events = stmts.getSdkEvents.all(req.params.id) as any[];
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 0;
+  const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : 0;
+  const total_count = (stmts.getSdkEventCount.get(req.params.id) as any).cnt;
+
+  let events: any[];
+  if (limit > 0 && offset === 0 && total_count > limit) {
+    // Initial load: get the last N events efficiently
+    events = stmts.getSdkEventsTail.all(req.params.id, limit) as any[];
+  } else if (limit > 0) {
+    events = stmts.getSdkEventsPaginated.all(req.params.id, limit, offset) as any[];
+  } else {
+    events = stmts.getSdkEvents.all(req.params.id) as any[];
+  }
+
   const formatted = events.map(e => ({
     event_type: e.event_type,
     event_data: JSON.parse(e.event_data),
@@ -1077,7 +1115,9 @@ app.get('/api/sessions/:id/events', (req, res) => {
     timestamp: e.timestamp,
   }));
 
-  res.json({ events: formatted, sdkSessionId: session.sdkSessionId });
+  const has_more = limit > 0 ? (offset + limit < total_count) : false;
+
+  res.json({ events: formatted, sdkSessionId: session.sdkSessionId, total_count, has_more });
 });
 
 // ============================
