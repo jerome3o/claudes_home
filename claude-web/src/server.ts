@@ -244,6 +244,20 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_hub_subs_target ON hub_subscriptions(subscription_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_hub_subs_session ON hub_subscriptions(session_id);
+
+  CREATE TABLE IF NOT EXISTS hub_reactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id TEXT NOT NULL REFERENCES hub_posts(id) ON DELETE CASCADE,
+    comment_id TEXT,
+    emoji TEXT NOT NULL,
+    session_id TEXT,
+    author_type TEXT NOT NULL DEFAULT 'user',
+    author_name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(post_id, emoji, session_id, comment_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_hub_reactions_post ON hub_reactions(post_id);
+  CREATE INDEX IF NOT EXISTS idx_hub_reactions_comment ON hub_reactions(comment_id);
 `);
 
 // Add was_querying column for seamless restart support (idempotent)
@@ -481,6 +495,22 @@ const stmts = {
   markSessionQuerying: db.prepare('UPDATE sessions SET was_querying = ? WHERE id = ?'),
   clearAllQuerying: db.prepare('UPDATE sessions SET was_querying = 0'),
   getQueryingSessions: db.prepare('SELECT id, name, sdkSessionId FROM sessions WHERE was_querying = 1 AND sdkSessionId IS NOT NULL'),
+  // Hub - Reactions
+  hubAddReaction: db.prepare(
+    'INSERT OR IGNORE INTO hub_reactions (post_id, comment_id, emoji, session_id, author_type, author_name) VALUES (?, ?, ?, ?, ?, ?)'
+  ),
+  hubRemoveReaction: db.prepare(
+    'DELETE FROM hub_reactions WHERE post_id = ? AND emoji = ? AND session_id = ? AND (comment_id IS ? OR comment_id = ?)'
+  ),
+  hubGetPostReactions: db.prepare(
+    'SELECT emoji, COUNT(*) as count, GROUP_CONCAT(author_name) as authors FROM hub_reactions WHERE post_id = ? AND comment_id IS NULL GROUP BY emoji'
+  ),
+  hubGetCommentReactions: db.prepare(
+    'SELECT emoji, COUNT(*) as count, GROUP_CONCAT(author_name) as authors FROM hub_reactions WHERE comment_id = ? GROUP BY emoji'
+  ),
+  hubGetUserReaction: db.prepare(
+    'SELECT id FROM hub_reactions WHERE post_id = ? AND emoji = ? AND session_id = ? AND (comment_id IS ? OR comment_id = ?)'
+  ),
 };
 
 // Session interfaces (for type safety)
@@ -1436,7 +1466,8 @@ app.get('/api/hub/posts/:id', (req, res) => {
       res.status(404).json({ error: 'Post not found' });
       return;
     }
-    res.json(post);
+    const reactions = stmts.hubGetPostReactions.all(req.params.id);
+    res.json({ ...post, reactions });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -1511,8 +1542,12 @@ app.delete('/api/hub/posts/:id', (req, res) => {
 // --- Comments ---
 app.get('/api/hub/posts/:id/comments', (req, res) => {
   try {
-    const comments = stmts.hubGetCommentsByPost.all(req.params.id);
-    res.json(comments);
+    const comments = stmts.hubGetCommentsByPost.all(req.params.id) as any[];
+    const commentsWithReactions = comments.map(c => ({
+      ...c,
+      reactions: stmts.hubGetCommentReactions.all(c.id),
+    }));
+    res.json(commentsWithReactions);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -1608,6 +1643,57 @@ app.get('/api/hub/sessions/:id/subscriptions', (req, res) => {
   try {
     const subs = stmts.hubGetSubscriptionsBySession.all(req.params.id);
     res.json(subs);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Hub Reactions ---
+app.post('/api/hub/reactions', (req, res) => {
+  try {
+    const { post_id, comment_id, emoji, session_id, author_name } = req.body;
+    if (!post_id || !emoji) {
+      res.status(400).json({ error: 'post_id and emoji are required' });
+      return;
+    }
+
+    const allowedEmojis = ['\u{1F44D}', '\u{1F44E}', '\u{1F389}', '\u{1F914}', '\u{2764}\u{FE0F}', '\u{1F680}'];
+    if (!allowedEmojis.includes(emoji)) {
+      res.status(400).json({ error: 'Invalid emoji' });
+      return;
+    }
+
+    const authorType = session_id ? 'agent' : 'user';
+    const cid = comment_id || null;
+
+    // Check if reaction already exists (toggle behavior)
+    const existing = stmts.hubGetUserReaction.get(post_id, emoji, session_id || null, cid, cid);
+
+    if (existing) {
+      stmts.hubRemoveReaction.run(post_id, emoji, session_id || null, cid, cid);
+      res.json({ action: 'removed', emoji });
+    } else {
+      stmts.hubAddReaction.run(post_id, cid, emoji, session_id || null, authorType, author_name || 'Anonymous');
+      res.json({ action: 'added', emoji });
+    }
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/posts/:id/reactions', (req, res) => {
+  try {
+    const reactions = stmts.hubGetPostReactions.all(req.params.id);
+    res.json(reactions);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/comments/:id/reactions', (req, res) => {
+  try {
+    const reactions = stmts.hubGetCommentReactions.all(req.params.id);
+    res.json(reactions);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
