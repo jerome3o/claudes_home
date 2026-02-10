@@ -1656,6 +1656,159 @@ app.post('/api/hub/files/base64', (req, res) => {
 });
 
 // ============================
+// Dashboard Routes & Stats API
+// ============================
+
+// Serve Dashboard page
+app.get('/dashboard', (req, res) => {
+  res.sendFile(join(__dirname, '../public/dashboard.html'));
+});
+
+// Activity timeline — messages per hour for last 24h, grouped by role
+app.get('/api/stats/activity', (req, res) => {
+  try {
+    const hours = 24;
+    const since = Date.now() - (hours * 60 * 60 * 1000);
+
+    const rows = db.prepare(`
+      SELECT
+        CAST((timestamp / 3600000) * 3600000 AS INTEGER) as hour_bucket,
+        role,
+        COUNT(*) as count
+      FROM messages
+      WHERE timestamp > ?
+      GROUP BY hour_bucket, role
+      ORDER BY hour_bucket
+    `).all(since) as Array<{ hour_bucket: number; role: string; count: number }>;
+
+    // Build full 24-hour array of buckets
+    const now = Date.now();
+    const currentHourStart = Math.floor(now / 3600000) * 3600000;
+    const bucketMap = new Map<number, { user: number; assistant: number; system: number }>();
+
+    for (let i = hours - 1; i >= 0; i--) {
+      const hourTs = currentHourStart - (i * 3600000);
+      bucketMap.set(hourTs, { user: 0, assistant: 0, system: 0 });
+    }
+
+    for (const row of rows) {
+      const bucket = bucketMap.get(row.hour_bucket);
+      if (bucket) {
+        const role = row.role as 'user' | 'assistant' | 'system';
+        if (role in bucket) {
+          bucket[role] = row.count;
+        }
+      }
+    }
+
+    const result = Array.from(bucketMap.entries()).map(([ts, counts]) => ({
+      hour: new Date(ts).toISOString(),
+      ...counts
+    }));
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Cost & token usage — from result events in sdk_events
+app.get('/api/stats/costs', (req, res) => {
+  try {
+    const since = Date.now() - (24 * 60 * 60 * 1000);
+
+    const rows = db.prepare(`
+      SELECT
+        CAST((timestamp / 3600000) * 3600000 AS INTEGER) as hour_bucket,
+        event_data
+      FROM sdk_events
+      WHERE event_type = 'result' AND timestamp > ?
+      ORDER BY timestamp
+    `).all(since) as Array<{ hour_bucket: number; event_data: string }>;
+
+    // Build hour buckets
+    const now = Date.now();
+    const currentHourStart = Math.floor(now / 3600000) * 3600000;
+    const hours = 24;
+    const bucketMap = new Map<number, { total_cost_usd: number; input_tokens: number; output_tokens: number }>();
+
+    for (let i = hours - 1; i >= 0; i--) {
+      const hourTs = currentHourStart - (i * 3600000);
+      bucketMap.set(hourTs, { total_cost_usd: 0, input_tokens: 0, output_tokens: 0 });
+    }
+
+    for (const row of rows) {
+      try {
+        const data = JSON.parse(row.event_data);
+        // Only include successful result events
+        if (data.subtype !== 'success') continue;
+        const bucket = bucketMap.get(row.hour_bucket);
+        if (bucket) {
+          bucket.total_cost_usd += (data.total_cost_usd || 0);
+          if (data.usage) {
+            bucket.input_tokens += (data.usage.input_tokens || 0);
+            bucket.output_tokens += (data.usage.output_tokens || 0);
+          }
+        }
+      } catch { /* skip unparseable event_data */ }
+    }
+
+    const result = Array.from(bucketMap.entries()).map(([ts, costs]) => ({
+      hour: new Date(ts).toISOString(),
+      ...costs
+    }));
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Sessions overview with stats
+app.get('/api/stats/sessions', (req, res) => {
+  try {
+    const sessions = db.prepare(`
+      SELECT
+        s.id, s.name, s.folder, s.lastActive, s.created,
+        (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as messageCount,
+        (SELECT COUNT(*) FROM sdk_events WHERE session_id = s.id AND event_type = 'result') as queryCount
+      FROM sessions s
+      ORDER BY s.lastActive DESC
+    `).all() as Array<any>;
+
+    const result = sessions.map((s: any) => ({
+      ...s,
+      isActive: activeQueries.has(s.id),
+    }));
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Recent task runs with task names
+app.get('/api/stats/task-runs', (req, res) => {
+  try {
+    const runs = db.prepare(`
+      SELECT
+        tr.id, tr.task_id, tr.session_id, tr.status,
+        tr.trigger_type, tr.trigger_data,
+        tr.started_at, tr.finished_at, tr.error, tr.result_summary,
+        st.name as task_name
+      FROM task_runs tr
+      LEFT JOIN scheduled_tasks st ON tr.task_id = st.id
+      ORDER BY tr.started_at DESC
+      LIMIT 20
+    `).all();
+
+    res.json(runs);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ============================
 // Session Message & Subscription API
 // ============================
 

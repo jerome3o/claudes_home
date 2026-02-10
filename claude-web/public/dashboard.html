@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f0f0f">
+  <title>Dashboard - Agent Activity</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="dash-app">
+    <!-- Header -->
+    <header class="dash-header">
+      <a href="/" class="dash-back-link" title="Back to Claude">&larr;</a>
+      <h1 class="dash-title">📊 Dashboard</h1>
+      <div class="dash-header-actions">
+        <span id="dashLastUpdated" class="dash-last-updated">Updated just now</span>
+        <button id="dashRefreshBtn" class="dash-btn dash-btn-secondary dash-btn-sm">↻ Refresh</button>
+      </div>
+    </header>
+
+    <!-- Main content area -->
+    <main class="dash-main">
+      <div class="dashboard-grid">
+
+        <!-- Activity Timeline (Bar Chart) - spans full width -->
+        <div class="dash-card dash-card-wide">
+          <div class="dash-card-header">
+            <h2 class="dash-card-title">Activity Timeline</h2>
+            <span class="dash-card-subtitle">Messages per hour (last 24h)</span>
+          </div>
+          <div class="dash-chart-container">
+            <canvas id="activityChart"></canvas>
+            <div id="activityEmpty" class="dash-empty" style="display:none;">
+              <div class="dash-empty-icon">📭</div>
+              <div class="dash-empty-text">No message activity in the last 24 hours</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cost & Token Usage (Line Chart) -->
+        <div class="dash-card">
+          <div class="dash-card-header">
+            <h2 class="dash-card-title">Cost & Tokens</h2>
+            <span class="dash-card-subtitle">Spend and usage (last 24h)</span>
+          </div>
+          <div class="dash-chart-container">
+            <canvas id="costChart"></canvas>
+            <div id="costEmpty" class="dash-empty" style="display:none;">
+              <div class="dash-empty-icon">💰</div>
+              <div class="dash-empty-text">No cost data in the last 24 hours</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Health -->
+        <div class="dash-card">
+          <div class="dash-card-header">
+            <h2 class="dash-card-title">System Health</h2>
+            <span class="dash-card-subtitle">Live metrics (10s refresh)</span>
+          </div>
+          <div id="systemHealth" class="dash-health">
+            <div class="dash-health-item">
+              <div class="dash-health-label">CPU Load</div>
+              <div class="dash-progress-bar">
+                <div id="cpuBar" class="dash-progress-fill dash-progress-cpu" style="width: 0%"></div>
+              </div>
+              <div id="cpuValue" class="dash-health-value">—</div>
+            </div>
+            <div class="dash-health-item">
+              <div class="dash-health-label">Memory</div>
+              <div class="dash-progress-bar">
+                <div id="memBar" class="dash-progress-fill dash-progress-mem" style="width: 0%"></div>
+              </div>
+              <div id="memValue" class="dash-health-value">—</div>
+            </div>
+            <div class="dash-health-item">
+              <div class="dash-health-label">Active Queries</div>
+              <div class="dash-health-big" id="queriesValue">0</div>
+            </div>
+            <div class="dash-health-item">
+              <div class="dash-health-label">Disk Usage</div>
+              <div class="dash-health-big" id="diskValue">—</div>
+            </div>
+            <div class="dash-health-item">
+              <div class="dash-health-label">Uptime</div>
+              <div class="dash-health-big" id="uptimeValue">—</div>
+            </div>
+            <div class="dash-health-item">
+              <div class="dash-health-label">Git Branch</div>
+              <div class="dash-health-big" id="gitValue">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Sessions Overview - spans full width -->
+        <div class="dash-card dash-card-wide">
+          <div class="dash-card-header">
+            <h2 class="dash-card-title">Sessions</h2>
+            <span class="dash-card-subtitle" id="sessionsCount">0 sessions</span>
+          </div>
+          <div id="sessionsGrid" class="dash-sessions-grid">
+            <div class="dash-empty">
+              <div class="dash-empty-icon">💬</div>
+              <div class="dash-empty-text">No sessions yet</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Task Run History -->
+        <div class="dash-card dash-card-wide">
+          <div class="dash-card-header">
+            <h2 class="dash-card-title">Recent Task Runs</h2>
+            <span class="dash-card-subtitle">Scheduled task execution history</span>
+          </div>
+          <div id="taskRunsTable" class="dash-table-container">
+            <div class="dash-empty">
+              <div class="dash-empty-icon">⏰</div>
+              <div class="dash-empty-text">No task runs yet</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
