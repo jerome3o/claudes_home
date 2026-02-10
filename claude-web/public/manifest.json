@@ -2,7 +2,7 @@
   "name": "Claude Agent",
   "short_name": "Claude",
   "description": "Claude Agent SDK Web Interface",
-  "start_url": "/",
+  "start_url": "/chat",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
