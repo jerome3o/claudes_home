@@ -36,6 +36,22 @@ function getSpawnEnv(): Record<string, string | undefined> {
   return env;
 }
 
+/**
+ * Resolve the working directory for a session's Claude Code process.
+ * Falls back to `process.cwd()` when the configured folder doesn't
+ * exist on disk — preventing a misleading `spawn node ENOENT` from
+ * `child_process.spawn` (which throws ENOENT for missing cwd too).
+ */
+function resolveSessionCwd(folder: string | null | undefined): string {
+  if (folder && existsSync(folder)) {
+    return folder;
+  }
+  if (folder) {
+    console.warn(`[session] Configured folder does not exist: ${folder} — falling back to ${process.cwd()}`);
+  }
+  return process.cwd();
+}
+
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 50 * 1024 * 1024 }); // 50MB max for image uploads
@@ -1934,7 +1950,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
 
     // Load session for folder and SDK session ID
     const sessionData = stmts.getSession.get(sessionId) as any;
-    const sessionCwd = sessionData?.folder || process.cwd();
+    const sessionCwd = resolveSessionCwd(sessionData?.folder);
 
     // Load MCP config
     const mcpServers = loadMcpConfig();
@@ -2278,7 +2294,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
 
     // Load session for folder and SDK session ID
     const session = stmts.getSession.get(sessionId) as any;
-    const sessionCwd = session?.folder || process.cwd();
+    const sessionCwd = resolveSessionCwd(session?.folder);
 
     // Load MCP config
     const mcpServers = loadMcpConfig();
@@ -2407,7 +2423,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
 
   // Load session for folder and SDK session ID
   const session = stmts.getSession.get(sessionId) as any;
-  const sessionCwd = session?.folder || process.cwd();
+  const sessionCwd = resolveSessionCwd(session?.folder);
 
   // Load MCP config and create query options
   const mcpServers = loadMcpConfig();
