@@ -142,6 +142,10 @@ const tools: Tool[] = [
           type: 'string',
           description: 'Your session name so the new agent knows who spawned it',
         },
+        watch: {
+          type: 'boolean',
+          description: 'If true, subscribe to be notified when the new agent\'s query completes. Requires sender_session_id.',
+        },
       },
       required: ['name', 'prompt'],
     },
@@ -654,12 +658,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           folder,
           sender_session_id,
           sender_session_name,
+          watch,
         } = args as {
           name: string;
           prompt: string;
           folder?: string;
           sender_session_id?: string;
           sender_session_name?: string;
+          watch?: boolean;
         };
 
         // Step 1: Create the session
@@ -685,6 +691,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           type: 'agent_message',
         });
 
+        // Auto-subscribe to query completion if watch is requested
+        if (watch && sender_session_id) {
+          await apiCall('POST', `/api/sessions/${session.id}/watch`, {
+            subscriber_session_id: sender_session_id,
+          });
+        }
+
         return {
           content: [
             {
@@ -693,6 +706,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 {
                   ...session,
                   send_status: sendResult.status,
+                  watching: !!(watch && sender_session_id),
                   message: `Agent "${agentName}" started and initial prompt sent.`,
                 },
                 null,

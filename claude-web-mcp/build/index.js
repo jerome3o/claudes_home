@@ -129,6 +129,10 @@ const tools = [
                     type: 'string',
                     description: 'Your session name so the new agent knows who spawned it',
                 },
+                watch: {
+                    type: 'boolean',
+                    description: 'If true, subscribe to be notified when the new agent\'s query completes. Requires sender_session_id.',
+                },
             },
             required: ['name', 'prompt'],
         },
@@ -476,7 +480,6 @@ const tools = [
                 description: { type: 'string', description: 'Brief description of what this topic is for' },
                 icon: { type: 'string', description: 'Emoji icon for the topic (e.g., "🤖")' },
                 session_id: { type: 'string', description: 'Your session ID (for attribution)' },
-                session_name: { type: 'string', description: 'Your session name (for attribution)' },
             },
             required: ['name'],
         },
@@ -496,7 +499,7 @@ const tools = [
     },
     {
         name: 'hub_create_post',
-        description: 'Create a new post in a topic. Content supports full markdown including images. You can reference images uploaded via hub_upload_file using markdown image syntax like ![alt](url).',
+        description: 'Create a new post in a topic. Content supports full markdown including images. You can reference images uploaded via hub_upload_file using markdown image syntax like ![alt](url). Author name is resolved server-side from the session_id.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -504,7 +507,6 @@ const tools = [
                 title: { type: 'string', description: 'Post title' },
                 content: { type: 'string', description: 'Post content (markdown supported)' },
                 session_id: { type: 'string', description: 'Your session ID (for attribution)' },
-                session_name: { type: 'string', description: 'Your session name (for attribution)' },
             },
             required: ['topic_id', 'title', 'content'],
         },
@@ -533,7 +535,7 @@ const tools = [
     },
     {
         name: 'hub_create_comment',
-        description: 'Add a comment to a post. Supports markdown. Use parent_comment_id to create threaded replies (max depth 4).',
+        description: 'Add a comment to a post. Supports markdown. Use parent_comment_id to create threaded replies (max depth 4). Author name is resolved server-side from the session_id.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -541,7 +543,6 @@ const tools = [
                 content: { type: 'string', description: 'Comment content (markdown supported)' },
                 parent_comment_id: { type: 'string', description: 'Parent comment ID for threaded replies (optional)' },
                 session_id: { type: 'string', description: 'Your session ID (for attribution)' },
-                session_name: { type: 'string', description: 'Your session name (for attribution)' },
             },
             required: ['post_id', 'content'],
         },
@@ -623,7 +624,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'start_agent': {
-                const { name: agentName, prompt, folder, sender_session_id, sender_session_name, } = args;
+                const { name: agentName, prompt, folder, sender_session_id, sender_session_name, watch, } = args;
                 // Step 1: Create the session
                 const session = await apiCall('POST', '/api/sessions', {
                     name: agentName,
@@ -644,6 +645,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     sender_session_name,
                     type: 'agent_message',
                 });
+                // Auto-subscribe to query completion if watch is requested
+                if (watch && sender_session_id) {
+                    await apiCall('POST', `/api/sessions/${session.id}/watch`, {
+                        subscriber_session_id: sender_session_id,
+                    });
+                }
                 return {
                     content: [
                         {
@@ -651,6 +658,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             text: JSON.stringify({
                                 ...session,
                                 send_status: sendResult.status,
+                                watching: !!(watch && sender_session_id),
                                 message: `Agent "${agentName}" started and initial prompt sent.`,
                             }, null, 2),
                         },
@@ -821,14 +829,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'hub_create_topic': {
-                const { name: topicName, description, icon, session_id, session_name } = args;
+                const { name: topicName, description, icon, session_id } = args;
                 const result = await apiCall('POST', '/api/hub/topics', {
                     name: topicName,
                     description,
                     icon,
                     author_type: 'agent',
                     author_id: session_id,
-                    author_name: session_name || 'Agent',
                 });
                 return {
                     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -848,13 +855,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'hub_create_post': {
-                const { topic_id, title, content, session_id, session_name } = args;
+                const { topic_id, title, content, session_id } = args;
                 const result = await apiCall('POST', `/api/hub/topics/${topic_id}/posts`, {
                     title,
                     content,
                     author_type: 'agent',
                     author_id: session_id,
-                    author_name: session_name || 'Agent',
                 });
                 return {
                     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -875,13 +881,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'hub_create_comment': {
-                const { post_id, content, parent_comment_id, session_id, session_name } = args;
+                const { post_id, content, parent_comment_id, session_id } = args;
                 const result = await apiCall('POST', `/api/hub/posts/${post_id}/comments`, {
                     content,
                     parent_comment_id: parent_comment_id || null,
                     author_type: 'agent',
                     author_id: session_id,
-                    author_name: session_name || 'Agent',
                 });
                 return {
                     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
