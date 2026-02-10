@@ -1759,6 +1759,40 @@ app.get('/api/hub/sessions/:id/subscriptions', (req, res) => {
   }
 });
 
+// Get all subscribers for a topic or post
+app.get('/api/hub/subscriptions/by-target', (req, res) => {
+  try {
+    const { type, id } = req.query;
+    if (!type || !id) {
+      res.status(400).json({ error: 'type and id query params required' });
+      return;
+    }
+    if (!['topic', 'post'].includes(type as string)) {
+      res.status(400).json({ error: 'type must be "topic" or "post"' });
+      return;
+    }
+    const subs = stmts.hubGetSubscriptionsByTarget.all(type, id);
+    res.json(subs);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Get subscriber count for a topic or post
+app.get('/api/hub/subscriptions/count', (req, res) => {
+  try {
+    const { type, id } = req.query;
+    if (!type || !id) {
+      res.status(400).json({ error: 'type and id query params required' });
+      return;
+    }
+    const subs = stmts.hubGetSubscriptionsByTarget.all(type, id) as any[];
+    res.json({ count: subs.length });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // --- Hub Reactions ---
 app.post('/api/hub/reactions', (req, res) => {
   try {
