@@ -1630,15 +1630,17 @@ app.get('/api/hub/sessions/:id/subscriptions', (req, res) => {
 // --- Hub Reactions ---
 app.post('/api/hub/reactions', (req, res) => {
   try {
-    const { post_id, comment_id, emoji, session_id, author_name } = req.body;
+    const { post_id, comment_id, emoji, session_id, author_name, reactor_id } = req.body;
     if (!post_id || !emoji) {
       res.status(400).json({ error: 'post_id and emoji are required' });
       return;
     }
 
-    const allowedEmojis = ['\u{1F44D}', '\u{1F44E}', '\u{1F389}', '\u{1F914}', '\u{2764}\u{FE0F}', '\u{1F680}'];
-    if (!allowedEmojis.includes(emoji)) {
-      res.status(400).json({ error: 'Invalid emoji' });
+    // reactor_id is required to enforce one-per-user uniqueness
+    // For agents it's the session_id, for web users it's a browser-generated ID
+    const rid = reactor_id || session_id;
+    if (!rid) {
+      res.status(400).json({ error: 'reactor_id is required' });
       return;
     }
 
@@ -1646,13 +1648,13 @@ app.post('/api/hub/reactions', (req, res) => {
     const cid = comment_id || null;
 
     // Check if reaction already exists (toggle behavior)
-    const existing = stmts.hubGetUserReaction.get(post_id, emoji, session_id || null, cid, cid);
+    const existing = stmts.hubGetUserReaction.get(post_id, emoji, rid, cid, cid);
 
     if (existing) {
-      stmts.hubRemoveReaction.run(post_id, emoji, session_id || null, cid, cid);
+      stmts.hubRemoveReaction.run(post_id, emoji, rid, cid, cid);
       res.json({ action: 'removed', emoji });
     } else {
-      stmts.hubAddReaction.run(post_id, cid, emoji, session_id || null, authorType, author_name || 'Anonymous');
+      stmts.hubAddReaction.run(post_id, cid, emoji, rid, authorType, author_name || 'Anonymous');
       res.json({ action: 'added', emoji });
     }
   } catch (e) {
