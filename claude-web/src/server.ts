@@ -151,6 +151,63 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_scheduled_events_status_time ON scheduled_events(status, scheduled_at);
+
+  -- Agent Hub tables
+  CREATE TABLE IF NOT EXISTS hub_topics (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    icon TEXT DEFAULT '',
+    created_by_type TEXT NOT NULL DEFAULT 'user',
+    created_by_id TEXT,
+    created_by_name TEXT DEFAULT 'User',
+    post_count INTEGER DEFAULT 0,
+    last_activity_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS hub_posts (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL REFERENCES hub_topics(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    author_type TEXT NOT NULL DEFAULT 'user',
+    author_id TEXT,
+    author_name TEXT DEFAULT 'User',
+    comment_count INTEGER DEFAULT 0,
+    pinned INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hub_posts_topic ON hub_posts(topic_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS hub_comments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES hub_posts(id) ON DELETE CASCADE,
+    parent_comment_id TEXT,
+    content TEXT NOT NULL,
+    author_type TEXT NOT NULL DEFAULT 'user',
+    author_id TEXT,
+    author_name TEXT DEFAULT 'User',
+    depth INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hub_comments_post ON hub_comments(post_id, created_at ASC);
+
+  CREATE TABLE IF NOT EXISTS hub_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    subscription_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, subscription_type, target_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hub_subs_target ON hub_subscriptions(subscription_type, target_id);
+  CREATE INDEX IF NOT EXISTS idx_hub_subs_session ON hub_subscriptions(session_id);
 `);
 
 // Migrate from JSON if old sessions.json exists and DB is empty
@@ -218,6 +275,7 @@ const stmts = {
   ),
   deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
   renameSession: db.prepare('UPDATE sessions SET name = ? WHERE id = ?'),
+  updateSessionFolder: db.prepare('UPDATE sessions SET folder = ? WHERE id = ?'),
   updateLastActive: db.prepare('UPDATE sessions SET lastActive = ? WHERE id = ?'),
   updateSdkSessionId: db.prepare('UPDATE sessions SET sdkSessionId = ? WHERE id = ?'),
   getMessages: db.prepare(
@@ -312,6 +370,69 @@ const stmts = {
   ),
   markEventRunning: db.prepare(
     `UPDATE scheduled_events SET status='running' WHERE id=? AND status='pending'`
+  ),
+  // Hub - Topics
+  hubGetAllTopics: db.prepare('SELECT * FROM hub_topics ORDER BY last_activity_at DESC'),
+  hubGetTopic: db.prepare('SELECT * FROM hub_topics WHERE id = ?'),
+  hubGetTopicByName: db.prepare('SELECT * FROM hub_topics WHERE name = ?'),
+  hubCreateTopic: db.prepare(
+    `INSERT INTO hub_topics (id, name, description, icon, created_by_type, created_by_id, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ),
+  hubUpdateTopic: db.prepare(
+    'UPDATE hub_topics SET name=?, description=?, icon=?, updated_at=CURRENT_TIMESTAMP WHERE id=?'
+  ),
+  hubDeleteTopic: db.prepare('DELETE FROM hub_topics WHERE id = ?'),
+  hubUpdateTopicActivity: db.prepare(
+    'UPDATE hub_topics SET last_activity_at=CURRENT_TIMESTAMP, post_count=post_count+1 WHERE id=?'
+  ),
+  hubDecrementTopicPostCount: db.prepare(
+    'UPDATE hub_topics SET post_count = MAX(0, post_count - 1) WHERE id = ?'
+  ),
+  // Hub - Posts
+  hubGetPostsByTopic: db.prepare(
+    'SELECT * FROM hub_posts WHERE topic_id = ? ORDER BY pinned DESC, created_at DESC LIMIT ? OFFSET ?'
+  ),
+  hubGetPost: db.prepare('SELECT * FROM hub_posts WHERE id = ?'),
+  hubCreatePost: db.prepare(
+    `INSERT INTO hub_posts (id, topic_id, title, content, author_type, author_id, author_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ),
+  hubUpdatePost: db.prepare(
+    'UPDATE hub_posts SET title=?, content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?'
+  ),
+  hubDeletePost: db.prepare('DELETE FROM hub_posts WHERE id = ?'),
+  hubIncrementCommentCount: db.prepare(
+    'UPDATE hub_posts SET comment_count=comment_count+1, updated_at=CURRENT_TIMESTAMP WHERE id=?'
+  ),
+  hubDecrementCommentCount: db.prepare(
+    'UPDATE hub_posts SET comment_count = MAX(0, comment_count - 1) WHERE id = ?'
+  ),
+  hubGetRecentPosts: db.prepare(
+    'SELECT p.*, t.name as topic_name, t.icon as topic_icon FROM hub_posts p JOIN hub_topics t ON p.topic_id = t.id ORDER BY p.created_at DESC LIMIT ?'
+  ),
+  // Hub - Comments
+  hubGetCommentsByPost: db.prepare(
+    'SELECT * FROM hub_comments WHERE post_id = ? ORDER BY created_at ASC'
+  ),
+  hubGetComment: db.prepare('SELECT * FROM hub_comments WHERE id = ?'),
+  hubCreateComment: db.prepare(
+    `INSERT INTO hub_comments (id, post_id, parent_comment_id, content, author_type, author_id, author_name, depth)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ),
+  hubDeleteComment: db.prepare('DELETE FROM hub_comments WHERE id = ?'),
+  // Hub - Subscriptions
+  hubGetSubscriptionsByTarget: db.prepare(
+    'SELECT hs.*, s.name as session_name FROM hub_subscriptions hs JOIN sessions s ON hs.session_id = s.id WHERE hs.subscription_type = ? AND hs.target_id = ?'
+  ),
+  hubGetSubscriptionsBySession: db.prepare(
+    'SELECT * FROM hub_subscriptions WHERE session_id = ?'
+  ),
+  hubCreateSubscription: db.prepare(
+    'INSERT OR IGNORE INTO hub_subscriptions (session_id, subscription_type, target_id) VALUES (?, ?, ?)'
+  ),
+  hubDeleteSubscription: db.prepare(
+    'DELETE FROM hub_subscriptions WHERE session_id = ? AND subscription_type = ? AND target_id = ?'
   ),
 };
 
@@ -431,13 +552,18 @@ app.delete('/api/sessions/:id', (req, res) => {
 });
 
 app.patch('/api/sessions/:id', (req, res) => {
-  const { name } = req.body;
-  if (!name) {
-    res.status(400).json({ error: 'Name is required' });
+  const { name, folder } = req.body;
+  if (!name && folder === undefined) {
+    res.status(400).json({ error: 'Name or folder is required' });
     return;
   }
-  stmts.renameSession.run(name, req.params.id);
-  res.json({ success: true, name });
+  if (name) {
+    stmts.renameSession.run(name, req.params.id);
+  }
+  if (folder !== undefined) {
+    stmts.updateSessionFolder.run(folder || null, req.params.id);
+  }
+  res.json({ success: true, name, folder });
 });
 
 app.get('/api/mcp-config', (req, res) => {
@@ -1111,6 +1237,382 @@ app.delete('/api/events/:id', (req, res) => {
 });
 
 // ============================
+// Agent Hub API
+// ============================
+
+// Resolve author name server-side instead of trusting client input
+function resolveAuthorName(author_type: string | undefined, author_id: string | undefined): string {
+  if (author_type === 'agent' && author_id) {
+    const session = stmts.getSession.get(author_id) as any;
+    if (session) return session.name;
+    return 'Agent';
+  }
+  // For users (or unspecified), hardcode the name
+  return 'Jerome';
+}
+
+// Hub static files
+const HUB_FILES_DIR = join(DATA_DIR, 'hub-files');
+if (!existsSync(HUB_FILES_DIR)) mkdirSync(HUB_FILES_DIR, { recursive: true });
+app.use('/hub-files', express.static(HUB_FILES_DIR));
+
+// Serve Hub page
+app.get('/hub', (req, res) => {
+  res.sendFile(join(__dirname, '../public/hub.html'));
+});
+app.get('/hub/*', (req, res) => {
+  res.sendFile(join(__dirname, '../public/hub.html'));
+});
+
+// --- Topics ---
+app.get('/api/hub/topics', (req, res) => {
+  try {
+    const topics = stmts.hubGetAllTopics.all();
+    res.json(topics);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/topics/:id', (req, res) => {
+  try {
+    let topic = stmts.hubGetTopic.get(req.params.id) as any;
+    if (!topic) {
+      topic = stmts.hubGetTopicByName.get(req.params.id) as any;
+    }
+    if (!topic) {
+      res.status(404).json({ error: 'Topic not found' });
+      return;
+    }
+    res.json(topic);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/hub/topics', (req, res) => {
+  try {
+    const { name, description, icon, author_type, author_id } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'Name is required' });
+      return;
+    }
+    const existing = stmts.hubGetTopicByName.get(name) as any;
+    if (existing) {
+      res.status(409).json({ error: 'Topic name already exists' });
+      return;
+    }
+    const id = randomUUID();
+    const resolvedName = resolveAuthorName(author_type, author_id);
+    stmts.hubCreateTopic.run(
+      id, name, description || null, icon || '',
+      author_type || 'user', author_id || null, resolvedName
+    );
+    res.json(stmts.hubGetTopic.get(id));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/hub/topics/:id', (req, res) => {
+  try {
+    const existing = stmts.hubGetTopic.get(req.params.id) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Topic not found' });
+      return;
+    }
+    const { name, description, icon } = req.body;
+    stmts.hubUpdateTopic.run(
+      name ?? existing.name,
+      description ?? existing.description,
+      icon ?? existing.icon,
+      req.params.id
+    );
+    res.json(stmts.hubGetTopic.get(req.params.id));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete('/api/hub/topics/:id', (req, res) => {
+  try {
+    stmts.hubDeleteTopic.run(req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Posts ---
+app.get('/api/hub/topics/:id/posts', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const posts = stmts.hubGetPostsByTopic.all(req.params.id, limit, offset);
+    res.json(posts);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/posts/recent', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const posts = stmts.hubGetRecentPosts.all(limit);
+    res.json(posts);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/posts/:id', (req, res) => {
+  try {
+    const post = stmts.hubGetPost.get(req.params.id) as any;
+    if (!post) {
+      res.status(404).json({ error: 'Post not found' });
+      return;
+    }
+    res.json(post);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/hub/topics/:id/posts', (req, res) => {
+  try {
+    const topic = stmts.hubGetTopic.get(req.params.id) as any;
+    if (!topic) {
+      res.status(404).json({ error: 'Topic not found' });
+      return;
+    }
+    const { title, content, author_type, author_id } = req.body;
+    if (!title || !content) {
+      res.status(400).json({ error: 'Title and content are required' });
+      return;
+    }
+    const id = randomUUID();
+    const resolvedName = resolveAuthorName(author_type, author_id);
+    stmts.hubCreatePost.run(
+      id, req.params.id, title, content,
+      author_type || 'user', author_id || null, resolvedName
+    );
+    stmts.hubUpdateTopicActivity.run(req.params.id);
+    const post = stmts.hubGetPost.get(id);
+
+    // Notify topic subscribers
+    notifyHubSubscribers(
+      'topic', req.params.id,
+      `New post in topic "${topic.name}": "${title}" by ${resolvedName}\n\nRead it at: /hub#/posts/${id}`,
+      author_id
+    );
+
+    res.json(post);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/hub/posts/:id', (req, res) => {
+  try {
+    const existing = stmts.hubGetPost.get(req.params.id) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Post not found' });
+      return;
+    }
+    const { title, content } = req.body;
+    stmts.hubUpdatePost.run(
+      title ?? existing.title,
+      content ?? existing.content,
+      req.params.id
+    );
+    res.json(stmts.hubGetPost.get(req.params.id));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete('/api/hub/posts/:id', (req, res) => {
+  try {
+    const post = stmts.hubGetPost.get(req.params.id) as any;
+    if (post) {
+      stmts.hubDecrementTopicPostCount.run(post.topic_id);
+    }
+    stmts.hubDeletePost.run(req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Comments ---
+app.get('/api/hub/posts/:id/comments', (req, res) => {
+  try {
+    const comments = stmts.hubGetCommentsByPost.all(req.params.id);
+    res.json(comments);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/hub/posts/:id/comments', (req, res) => {
+  try {
+    const post = stmts.hubGetPost.get(req.params.id) as any;
+    if (!post) {
+      res.status(404).json({ error: 'Post not found' });
+      return;
+    }
+    const { content, parent_comment_id, author_type, author_id } = req.body;
+    if (!content) {
+      res.status(400).json({ error: 'Content is required' });
+      return;
+    }
+    let depth = 0;
+    if (parent_comment_id) {
+      const parent = stmts.hubGetComment.get(parent_comment_id) as any;
+      if (parent) depth = Math.min((parent.depth || 0) + 1, 4);
+    }
+    const id = randomUUID();
+    const resolvedName = resolveAuthorName(author_type, author_id);
+    stmts.hubCreateComment.run(
+      id, req.params.id, parent_comment_id || null, content,
+      author_type || 'user', author_id || null, resolvedName,
+      depth
+    );
+    stmts.hubIncrementCommentCount.run(req.params.id);
+    const comment = stmts.hubGetComment.get(id);
+
+    // Notify post subscribers (and topic subscribers via the helper)
+    notifyHubSubscribers(
+      'post', req.params.id,
+      `New comment on "${post.title}" by ${resolvedName}:\n\n${content.substring(0, 300)}${content.length > 300 ? '...' : ''}\n\nView thread: /hub#/posts/${req.params.id}`,
+      author_id
+    );
+
+    res.json(comment);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete('/api/hub/comments/:id', (req, res) => {
+  try {
+    const comment = stmts.hubGetComment.get(req.params.id) as any;
+    if (comment) {
+      stmts.hubDecrementCommentCount.run(comment.post_id);
+    }
+    stmts.hubDeleteComment.run(req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Hub Subscriptions ---
+app.post('/api/hub/subscriptions', (req, res) => {
+  try {
+    const { session_id, subscription_type, target_id } = req.body;
+    if (!session_id || !subscription_type || !target_id) {
+      res.status(400).json({ error: 'session_id, subscription_type, and target_id are required' });
+      return;
+    }
+    if (!['topic', 'post'].includes(subscription_type)) {
+      res.status(400).json({ error: 'subscription_type must be "topic" or "post"' });
+      return;
+    }
+    stmts.hubCreateSubscription.run(session_id, subscription_type, target_id);
+    res.json({ success: true, session_id, subscription_type, target_id });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete('/api/hub/subscriptions', (req, res) => {
+  try {
+    const { session_id, subscription_type, target_id } = req.body;
+    if (!session_id || !subscription_type || !target_id) {
+      res.status(400).json({ error: 'session_id, subscription_type, and target_id are required' });
+      return;
+    }
+    stmts.hubDeleteSubscription.run(session_id, subscription_type, target_id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/sessions/:id/subscriptions', (req, res) => {
+  try {
+    const subs = stmts.hubGetSubscriptionsBySession.all(req.params.id);
+    res.json(subs);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Hub File Upload (multipart for web UI) ---
+const hubUpload = multer({ dest: '/tmp/claude-hub-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+app.post('/api/hub/files', hubUpload.array('files', 10), (req, res) => {
+  try {
+    const subfolder = ((req.body.subfolder as string) || '').replace(/\.\./g, '');
+    const targetDir = join(HUB_FILES_DIR, subfolder);
+    if (!targetDir.startsWith(HUB_FILES_DIR)) {
+      res.status(400).json({ error: 'Invalid subfolder' });
+      return;
+    }
+    if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
+
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      res.status(400).json({ error: 'No files provided' });
+      return;
+    }
+
+    const uploaded: { name: string; url: string }[] = [];
+    for (const file of files) {
+      const ext = file.originalname.split('.').pop() || '';
+      const uniqueName = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}.${ext}`;
+      const dest = join(targetDir, uniqueName);
+      const data = readFileSync(file.path);
+      writeFileSync(dest, data);
+      unlinkSync(file.path);
+      const relativePath = subfolder ? `${subfolder}/${uniqueName}` : uniqueName;
+      uploaded.push({ name: file.originalname, url: `/hub-files/${relativePath}` });
+    }
+    res.json({ success: true, files: uploaded });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Hub base64 file upload (for MCP agents)
+app.post('/api/hub/files/base64', (req, res) => {
+  try {
+    const { filename, content_base64, subfolder } = req.body;
+    if (!filename || !content_base64) {
+      res.status(400).json({ error: 'filename and content_base64 are required' });
+      return;
+    }
+    const sf = (subfolder || '').replace(/\.\./g, '');
+    const targetDir = join(HUB_FILES_DIR, sf);
+    if (!targetDir.startsWith(HUB_FILES_DIR)) {
+      res.status(400).json({ error: 'Invalid subfolder' });
+      return;
+    }
+    if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
+
+    const ext = filename.split('.').pop() || 'bin';
+    const uniqueName = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}.${ext}`;
+    const dest = join(targetDir, uniqueName);
+    const buffer = Buffer.from(content_base64, 'base64');
+    writeFileSync(dest, buffer);
+    const relativePath = sf ? `${sf}/${uniqueName}` : uniqueName;
+    res.json({ success: true, url: `/hub-files/${relativePath}`, filename: uniqueName });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ============================
 // Session Message & Subscription API
 // ============================
 
@@ -1410,12 +1912,16 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       stmts.updateLastActive.run(Date.now(), sessionId);
     }
 
+    // Load session for folder and SDK session ID
+    const sessionData = stmts.getSession.get(sessionId) as any;
+    const sessionCwd = sessionData?.folder || process.cwd();
+
     // Load MCP config
     const mcpServers = loadMcpConfig();
 
     // Create query options
     const options: SDKOptions = {
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       mcpServers,
       canUseTool: async (toolName, input) => ({
         behavior: 'allow',
@@ -1749,12 +2255,16 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       fullPrompt = `<task_prompt>\n${task.prompt}\n</task_prompt>\n\n<webhook_data>\n${JSON.stringify(triggerData, null, 2)}\n</webhook_data>`;
     }
 
+    // Load session for folder and SDK session ID
+    const session = stmts.getSession.get(sessionId) as any;
+    const sessionCwd = session?.folder || process.cwd();
+
     // Load MCP config
     const mcpServers = loadMcpConfig();
 
     // Create query options (0 = unlimited for turns/budget)
     const options: SDKOptions = {
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       mcpServers,
       ...(task.max_turns > 0 && { maxTurns: task.max_turns }),
       ...(task.max_budget_usd > 0 && { maxBudgetUsd: task.max_budget_usd }),
@@ -1765,8 +2275,6 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       }),
     };
 
-    // Resume if session has SDK session ID
-    const session = stmts.getSession.get(sessionId) as any;
     if (session?.sdkSessionId) {
       options.resume = session.sdkSessionId;
     }
@@ -1875,10 +2383,14 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     console.error('[processIncomingMessage] Failed to persist user SDK event:', e);
   }
 
+  // Load session for folder and SDK session ID
+  const session = stmts.getSession.get(sessionId) as any;
+  const sessionCwd = session?.folder || process.cwd();
+
   // Load MCP config and create query options
   const mcpServers = loadMcpConfig();
   const options: SDKOptions = {
-    cwd: process.cwd(),
+    cwd: sessionCwd,
     mcpServers,
     canUseTool: async (toolName: string, input: any) => ({
       behavior: 'allow' as const,
@@ -1886,7 +2398,6 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     }),
   };
 
-  const session = stmts.getSession.get(sessionId) as any;
   if (session?.sdkSessionId) {
     options.resume = session.sdkSessionId;
   }
@@ -1947,6 +2458,58 @@ function processNextQueuedMessage(sessionId: string) {
       // Try next message even if this one failed
       processNextQueuedMessage(sessionId);
     });
+}
+
+// ============================
+// Hub Notification System
+// ============================
+function notifyHubSubscribers(
+  subscriptionType: 'topic' | 'post',
+  targetId: string,
+  message: string,
+  excludeSessionId?: string
+) {
+  const subs = stmts.hubGetSubscriptionsByTarget.all(subscriptionType, targetId) as any[];
+
+  // Also notify topic subscribers when a new comment is on a post in that topic
+  let topicSubs: any[] = [];
+  if (subscriptionType === 'post') {
+    const post = stmts.hubGetPost.get(targetId) as any;
+    if (post) {
+      topicSubs = stmts.hubGetSubscriptionsByTarget.all('topic', post.topic_id) as any[];
+    }
+  }
+
+  // Combine and deduplicate by session_id
+  const allSubs = [...subs, ...topicSubs];
+  const seen = new Set<string>();
+
+  for (const sub of allSubs) {
+    if (seen.has(sub.session_id)) continue;
+    if (sub.session_id === excludeSessionId) continue;
+    seen.add(sub.session_id);
+
+    const hasActiveQuery = activeQueries.has(sub.session_id);
+    const formattedMessage = `[Hub Notification]\n${message}`;
+
+    if (hasActiveQuery) {
+      const metadata = JSON.stringify({ type: 'hub_notification', subscription_type: subscriptionType, target_id: targetId });
+      stmts.enqueueMessage.run(sub.session_id, 'hub_notification', formattedMessage, metadata);
+      console.log(`[hub] Queued notification for session ${sub.session_id} (active query)`);
+    } else {
+      processIncomingMessage(sub.session_id, formattedMessage).catch(e =>
+        console.error(`[hub] Failed to deliver notification to session ${sub.session_id}:`, e)
+      );
+      console.log(`[hub] Delivering notification to session ${sub.session_id}`);
+    }
+  }
+
+  // Broadcast via WebSocket for real-time UI updates
+  broadcastToAll({
+    type: 'hub_update',
+    subscription_type: subscriptionType,
+    target_id: targetId,
+  });
 }
 
 // Initialize cron scheduler on startup

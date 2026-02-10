@@ -54,13 +54,17 @@ const tools: Tool[] = [
   },
   {
     name: 'create_session',
-    description: 'Create a new agent session that can be used for communication or task execution.',
+    description: 'Create a new agent session that can be used for communication or task execution. Optionally specify a working folder so the agent runs in a specific directory.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
           description: 'Name for the new session (e.g., "WhatsApp Handler")',
+        },
+        folder: {
+          type: 'string',
+          description: 'Working directory for the session. The agent will run with this as its cwd. Defaults to the server\'s working directory if not specified.',
         },
       },
       required: ['name'],
@@ -109,6 +113,37 @@ const tools: Tool[] = [
         },
       },
       required: ['session_id'],
+    },
+  },
+
+  {
+    name: 'start_agent',
+    description: 'Start a new persistent agent session and send it an initial message/instructions. This creates a new session, then sends the prompt to it, which kicks off a query. The agent will run autonomously with the given instructions. Use this to delegate work to a specialist agent. Returns the session details so you can later send_message or get_session_history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Name for the new agent (e.g., "Code Reviewer", "Data Analyst", "WhatsApp Bot")',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Initial instructions/prompt to send to the agent. This is the first message the agent will receive and act on.',
+        },
+        folder: {
+          type: 'string',
+          description: 'Working directory for the agent. The agent will operate with this as its cwd, having access to files in that directory. Defaults to the server\'s working directory.',
+        },
+        sender_session_id: {
+          type: 'string',
+          description: 'Your session ID so the new agent knows who spawned it',
+        },
+        sender_session_name: {
+          type: 'string',
+          description: 'Your session name so the new agent knows who spawned it',
+        },
+      },
+      required: ['name', 'prompt'],
     },
   },
 
@@ -438,6 +473,143 @@ const tools: Tool[] = [
       required: ['event_id'],
     },
   },
+
+  // === HUB (AGENT FORUM) TOOLS ===
+  {
+    name: 'hub_list_topics',
+    description: 'List all topics in the Agent Hub forum. Returns topic names, descriptions, post counts, and last activity times.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'hub_create_topic',
+    description: 'Create a new topic (like a subreddit/channel) in the Agent Hub. Topics are shared spaces for agents and humans to discuss.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Topic name (unique, lowercase-with-dashes recommended, e.g. "daily-standup")' },
+        description: { type: 'string', description: 'Brief description of what this topic is for' },
+        icon: { type: 'string', description: 'Emoji icon for the topic (e.g., "🤖")' },
+        session_id: { type: 'string', description: 'Your session ID (for attribution)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'hub_list_posts',
+    description: 'List posts in a topic. Returns titles, authors, timestamps, and comment counts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic_id: { type: 'string', description: 'Topic ID to list posts from' },
+        limit: { type: 'number', description: 'Max posts to return (default 50)' },
+        offset: { type: 'number', description: 'Offset for pagination (default 0)' },
+      },
+      required: ['topic_id'],
+    },
+  },
+  {
+    name: 'hub_create_post',
+    description: 'Create a new post in a topic. Content supports full markdown including images. You can reference images uploaded via hub_upload_file using markdown image syntax like ![alt](url). Author name is resolved server-side from the session_id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic_id: { type: 'string', description: 'Topic ID to post in' },
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post content (markdown supported)' },
+        session_id: { type: 'string', description: 'Your session ID (for attribution)' },
+      },
+      required: ['topic_id', 'title', 'content'],
+    },
+  },
+  {
+    name: 'hub_get_post',
+    description: 'Get a specific post by ID, including its full content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID to retrieve' },
+      },
+      required: ['post_id'],
+    },
+  },
+  {
+    name: 'hub_list_comments',
+    description: 'List all comments on a post. Comments are returned in chronological order with thread depth for nested display.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID to list comments for' },
+      },
+      required: ['post_id'],
+    },
+  },
+  {
+    name: 'hub_create_comment',
+    description: 'Add a comment to a post. Supports markdown. Use parent_comment_id to create threaded replies (max depth 4). Author name is resolved server-side from the session_id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID to comment on' },
+        content: { type: 'string', description: 'Comment content (markdown supported)' },
+        parent_comment_id: { type: 'string', description: 'Parent comment ID for threaded replies (optional)' },
+        session_id: { type: 'string', description: 'Your session ID (for attribution)' },
+      },
+      required: ['post_id', 'content'],
+    },
+  },
+  {
+    name: 'hub_subscribe',
+    description: 'Subscribe your session to a topic or post in the Agent Hub. You will receive notifications via message queue when new posts are created (topic subscription) or new comments are added (post subscription). Also triggers for topic subscriptions when comments are added to any post in that topic.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Your session ID to subscribe' },
+        subscription_type: { type: 'string', enum: ['topic', 'post'], description: '"topic" to get notified of new posts, "post" to get notified of new comments' },
+        target_id: { type: 'string', description: 'Topic ID or Post ID to subscribe to' },
+      },
+      required: ['session_id', 'subscription_type', 'target_id'],
+    },
+  },
+  {
+    name: 'hub_unsubscribe',
+    description: 'Unsubscribe from a topic or post in the Agent Hub.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Your session ID' },
+        subscription_type: { type: 'string', enum: ['topic', 'post'], description: 'Type of subscription to remove' },
+        target_id: { type: 'string', description: 'Topic ID or Post ID to unsubscribe from' },
+      },
+      required: ['session_id', 'subscription_type', 'target_id'],
+    },
+  },
+  {
+    name: 'hub_list_subscriptions',
+    description: 'List all Agent Hub subscriptions for a session. Shows which topics and posts the session is subscribed to.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Session ID to check subscriptions for' },
+      },
+      required: ['session_id'],
+    },
+  },
+  {
+    name: 'hub_upload_file',
+    description: 'Upload a file (typically an image) to the Agent Hub file storage. Returns the URL that can be used in markdown posts/comments with ![alt](url) syntax. The file content should be base64-encoded.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string', description: 'Filename with extension (e.g., "chart.png", "diagram.svg")' },
+        content_base64: { type: 'string', description: 'Base64-encoded file content' },
+        subfolder: { type: 'string', description: 'Optional subfolder within hub-files (default: "agent-uploads")' },
+      },
+      required: ['filename', 'content_base64'],
+    },
+  },
 ];
 
 // ============================
@@ -468,10 +640,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'create_session': {
-        const { name: sessionName } = args as { name: string };
-        const session = await apiCall('POST', '/api/sessions', { name: sessionName });
+        const { name: sessionName, folder } = args as { name: string; folder?: string };
+        const session = await apiCall('POST', '/api/sessions', { name: sessionName, folder });
         return {
           content: [{ type: 'text', text: JSON.stringify(session, null, 2) }],
+        };
+      }
+
+      case 'start_agent': {
+        const {
+          name: agentName,
+          prompt,
+          folder,
+          sender_session_id,
+          sender_session_name,
+        } = args as {
+          name: string;
+          prompt: string;
+          folder?: string;
+          sender_session_id?: string;
+          sender_session_name?: string;
+        };
+
+        // Step 1: Create the session
+        const session = await apiCall('POST', '/api/sessions', {
+          name: agentName,
+          folder,
+        });
+
+        // Step 2: Send the initial prompt
+        let formattedPrompt = prompt;
+        if (sender_session_id || sender_session_name) {
+          formattedPrompt = [
+            `[Agent Started by "${sender_session_name || 'Unknown'}" (ID: ${sender_session_id || 'unknown'})]`,
+            '',
+            prompt,
+          ].join('\n');
+        }
+
+        const sendResult = await apiCall('POST', `/api/sessions/${session.id}/send`, {
+          content: formattedPrompt,
+          sender_session_id,
+          sender_session_name,
+          type: 'agent_message',
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  ...session,
+                  send_status: sendResult.status,
+                  message: `Agent "${agentName}" started and initial prompt sent.`,
+                },
+                null,
+                2
+              ),
+            },
+          ],
         };
       }
 
@@ -684,6 +912,134 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await apiCall('DELETE', `/api/events/${event_id}`);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // === HUB (AGENT FORUM) TOOLS ===
+
+      case 'hub_list_topics': {
+        const topics = await apiCall('GET', '/api/hub/topics');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(topics, null, 2) }],
+        };
+      }
+
+      case 'hub_create_topic': {
+        const { name: topicName, description, icon, session_id } = args as any;
+        const result = await apiCall('POST', '/api/hub/topics', {
+          name: topicName,
+          description,
+          icon,
+          author_type: 'agent',
+          author_id: session_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_list_posts': {
+        const { topic_id, limit, offset } = args as any;
+        const params = new URLSearchParams();
+        if (limit) params.set('limit', String(limit));
+        if (offset) params.set('offset', String(offset));
+        const qs = params.toString() ? `?${params.toString()}` : '';
+        const posts = await apiCall('GET', `/api/hub/topics/${topic_id}/posts${qs}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(posts, null, 2) }],
+        };
+      }
+
+      case 'hub_create_post': {
+        const { topic_id, title, content, session_id } = args as any;
+        const result = await apiCall('POST', `/api/hub/topics/${topic_id}/posts`, {
+          title,
+          content,
+          author_type: 'agent',
+          author_id: session_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_get_post': {
+        const { post_id } = args as { post_id: string };
+        const post = await apiCall('GET', `/api/hub/posts/${post_id}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(post, null, 2) }],
+        };
+      }
+
+      case 'hub_list_comments': {
+        const { post_id } = args as { post_id: string };
+        const comments = await apiCall('GET', `/api/hub/posts/${post_id}/comments`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(comments, null, 2) }],
+        };
+      }
+
+      case 'hub_create_comment': {
+        const { post_id, content, parent_comment_id, session_id } = args as any;
+        const result = await apiCall('POST', `/api/hub/posts/${post_id}/comments`, {
+          content,
+          parent_comment_id: parent_comment_id || null,
+          author_type: 'agent',
+          author_id: session_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_subscribe': {
+        const { session_id, subscription_type, target_id } = args as any;
+        const result = await apiCall('POST', '/api/hub/subscriptions', {
+          session_id,
+          subscription_type,
+          target_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_unsubscribe': {
+        const { session_id, subscription_type, target_id } = args as any;
+        const result = await apiCall('DELETE', '/api/hub/subscriptions', {
+          session_id,
+          subscription_type,
+          target_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_list_subscriptions': {
+        const { session_id } = args as { session_id: string };
+        const subs = await apiCall('GET', `/api/hub/sessions/${session_id}/subscriptions`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(subs, null, 2) }],
+        };
+      }
+
+      case 'hub_upload_file': {
+        const { filename, content_base64, subfolder } = args as any;
+        const result = await apiCall('POST', '/api/hub/files/base64', {
+          filename,
+          content_base64,
+          subfolder: subfolder || 'agent-uploads',
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ...result,
+              markdown_image: `![${filename}](${result.url})`,
+              note: 'Use the markdown_image string to embed this image in a post or comment.',
+            }, null, 2),
+          }],
         };
       }
 
