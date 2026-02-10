@@ -552,6 +552,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Landing page: serve hub as the main page
+app.get('/', (req, res) => {
+  res.sendFile(join(__dirname, '../public/hub.html'));
+});
+
+// Chat app at /chat
+app.get('/chat', (req, res) => {
+  res.sendFile(join(__dirname, '../public/index.html'));
+});
+
 // Serve static files
 app.use(express.static(join(__dirname, '../public')));
 app.use(express.json());
@@ -1299,12 +1309,12 @@ const HUB_FILES_DIR = join(DATA_DIR, 'hub-files');
 if (!existsSync(HUB_FILES_DIR)) mkdirSync(HUB_FILES_DIR, { recursive: true });
 app.use('/hub-files', express.static(HUB_FILES_DIR));
 
-// Serve Hub page
+// Redirect /hub to / for backward compatibility
 app.get('/hub', (req, res) => {
-  res.sendFile(join(__dirname, '../public/hub.html'));
+  res.redirect('/');
 });
 app.get('/hub/*', (req, res) => {
-  res.sendFile(join(__dirname, '../public/hub.html'));
+  res.redirect('/');
 });
 
 // --- Topics ---
