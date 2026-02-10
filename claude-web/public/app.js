@@ -87,6 +87,7 @@ let reconnectAttempts = 0; // For exponential backoff
 let selectSessionSeq = 0; // Batch 3: sequence counter for race condition prevention
 let lastPingTime = null; // Track last server ping
 let activeMsgStatus = null; // Current message status element (for ack/working/done)
+let sessionQueryStates = {}; // { sessionId: boolean } — tracks active queries per session
 
 // DOM elements
 const sidebar = document.getElementById('sidebar');
@@ -401,7 +402,7 @@ function handleServerMessage(data) {
 
   // Ignore messages from other sessions (prevents leaking)
   // BUT allow session_notification through — those are meant for cross-session display
-  if (data.sessionId && data.sessionId !== currentSessionId && data.type !== 'session_notification') {
+  if (data.sessionId && data.sessionId !== currentSessionId && data.type !== 'session_notification' && data.type !== 'session_query_state') {
     console.log('Ignoring message for different session:', data.sessionId);
     return;
   }
@@ -481,6 +482,11 @@ function handleServerMessage(data) {
       }
       break;
     }
+
+    case 'session_query_state':
+      sessionQueryStates[data.sessionId] = data.active;
+      renderSessions();
+      break;
   }
 }
 
@@ -652,6 +658,7 @@ async function loadSessions() {
   try {
     const response = await fetch('/api/sessions');
     sessions = await response.json();
+    sessions.forEach(s => { sessionQueryStates[s.id] = s.activeQuery || false; });
     renderSessions();
   } catch (error) {
     console.error('Failed to load sessions:', error);
@@ -659,7 +666,15 @@ async function loadSessions() {
 }
 
 function renderSessions() {
-  sessionList.innerHTML = sessions.map(session => {
+  // Sort: active queries first, then by recency
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const aActive = sessionQueryStates[a.id] ? 1 : 0;
+    const bActive = sessionQueryStates[b.id] ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    return b.lastActive - a.lastActive;
+  });
+
+  sessionList.innerHTML = sortedSessions.map(session => {
     const date = new Date(session.lastActive);
     const timeStr = date.toLocaleString([], {
       month: 'short',
@@ -674,6 +689,12 @@ function renderSessions() {
       : '';
     const unreadClass = unread > 0 ? ' has-unread' : '';
 
+    const isQuerying = sessionQueryStates[session.id];
+    const activityDot = isQuerying ? '<span class="session-activity-dot"></span>' : '';
+    const timeDisplay = isQuerying
+      ? '<div class="session-time querying">Working...</div>'
+      : `<div class="session-time">${timeStr}</div>`;
+
     const folderHint = session.folder
       ? `<div class="session-folder" title="${escapeHtml(session.folder)}">📁 ${escapeHtml(session.folder.split('/').pop() || session.folder)}</div>`
       : '';
@@ -682,9 +703,9 @@ function renderSessions() {
       <div class="session-item ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
            data-id="${session.id}">
         <div class="session-item-content">
-          <div class="session-name">${escapeHtml(session.name)}${unreadBadge}</div>
+          <div class="session-name">${escapeHtml(session.name)}${activityDot}${unreadBadge}</div>
           ${folderHint}
-          <div class="session-time">${timeStr}</div>
+          ${timeDisplay}
         </div>
         <div class="session-actions">
           <button class="session-action-btn session-rename-btn" data-id="${session.id}" title="Rename">✏️</button>
