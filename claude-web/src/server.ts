@@ -320,6 +320,39 @@ function migrateFromJson() {
 migrateFromJson();
 
 // ============================
+// Announcements topic auto-setup
+// ============================
+const ANNOUNCEMENTS_TOPIC_ID = 'announcements-topic-00000000';
+
+function ensureAnnouncementsTopic() {
+  const existing = stmts.hubGetTopicByName.get('announcements') as any;
+  if (!existing) {
+    stmts.hubCreateTopic.run(
+      ANNOUNCEMENTS_TOPIC_ID,
+      'announcements',
+      'System-wide announcements — all sessions are auto-subscribed',
+      '📢',
+      'system',
+      null,
+      'System'
+    );
+    console.log('[hub] Created announcements topic');
+  }
+}
+
+function autoSubscribeAnnouncementsTopic() {
+  const topic = stmts.hubGetTopicByName.get('announcements') as any;
+  if (!topic) return;
+  const sessions = stmts.getAllSessions.all() as any[];
+  for (const session of sessions) {
+    stmts.hubCreateSubscription.run(session.id, 'topic', topic.id);
+  }
+}
+
+ensureAnnouncementsTopic();
+autoSubscribeAnnouncementsTopic();
+
+// ============================
 // Database helper functions
 // ============================
 const stmts = {
@@ -623,6 +656,12 @@ app.post('/api/sessions', (req, res) => {
   const sessionName = name || `Session ${(stmts.getAllSessions.all() as any[]).length + 1}`;
 
   stmts.createSession.run(id, sessionName, folder || null, now, now, null);
+
+  // Auto-subscribe to announcements topic
+  const announcementsTopic = stmts.hubGetTopicByName.get('announcements') as any;
+  if (announcementsTopic) {
+    stmts.hubCreateSubscription.run(id, 'topic', announcementsTopic.id);
+  }
 
   res.json({
     id,
@@ -2707,6 +2746,13 @@ function createTaskSession(task: any): string {
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const name = `🤖 ${task.name} - ${dateStr}`;
   stmts.createSession.run(id, name, null, now, now, null);
+
+  // Auto-subscribe to announcements topic
+  const announcementsTopic = stmts.hubGetTopicByName.get('announcements') as any;
+  if (announcementsTopic) {
+    stmts.hubCreateSubscription.run(id, 'topic', announcementsTopic.id);
+  }
+
   return id;
 }
 

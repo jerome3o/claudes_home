@@ -97,7 +97,7 @@ async function showTopicList() {
         html += `<a href="#/topics/${t.id}" class="hub-topic-card">
           <span class="hub-topic-icon">${t.icon || '#'}</span>
           <div class="hub-topic-info">
-            <span class="hub-topic-name">${escapeHtml(t.name)}</span>
+            <span class="hub-topic-name">${escapeHtml(t.name)}${t.name === 'announcements' ? ' <span class="hub-auto-sub-badge">(auto-subscribed)</span>' : ''}</span>
             <span class="hub-topic-desc">${escapeHtml(t.description || '')}</span>
           </div>
           <span class="hub-topic-count">${t.post_count} post${t.post_count !== 1 ? 's' : ''}</span>
