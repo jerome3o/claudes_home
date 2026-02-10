@@ -2262,3 +2262,119 @@ body {
   margin-left: 0.25rem;
 }
 
+/* ====================================
+   Swipe Gesture Navigation
+   ==================================== */
+
+/* Only enable swipe on touch devices */
+@media (hover: none) {
+  /* Floating preview pill — shows target session name during swipe */
+  .swipe-preview-pill {
+    position: absolute;
+    top: 0.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
+    background: rgba(30, 30, 30, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    padding: 0.3rem 0.85rem;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    max-width: 70vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+  }
+
+  .swipe-preview-pill.visible {
+    opacity: 1;
+  }
+
+  .swipe-preview-pill .swipe-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success-color);
+    margin-right: 0.35rem;
+    vertical-align: middle;
+  }
+
+  .swipe-preview-pill .swipe-arrow {
+    color: var(--text-tertiary);
+    margin-right: 0.3rem;
+    font-size: 0.7rem;
+  }
+
+  /* Disable smooth scroll during swipe gesture */
+  .messages.swiping {
+    scroll-behavior: auto !important;
+    overflow-y: hidden !important;
+    will-change: transform, opacity;
+    touch-action: pan-x !important;
+  }
+
+  /* Slide-out animations */
+  .messages.swipe-out-left {
+    animation: swipeOutLeft 0.2s ease-in forwards;
+  }
+
+  .messages.swipe-out-right {
+    animation: swipeOutRight 0.2s ease-in forwards;
+  }
+
+  /* Slide-in animations */
+  .messages.swipe-in-left {
+    animation: swipeInLeft 0.2s ease-out forwards;
+  }
+
+  .messages.swipe-in-right {
+    animation: swipeInRight 0.2s ease-out forwards;
+  }
+
+  /* Snap-back animation (released before threshold) */
+  .messages.swipe-snap-back {
+    transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+    transform: translateX(0) !important;
+    opacity: 1 !important;
+  }
+
+  /* Edge bounce — subtle rubber-band effect at first/last session */
+  .messages.swipe-edge-bounce {
+    animation: edgeBounce 0.3s ease-out;
+  }
+
+  @keyframes swipeOutLeft {
+    from { transform: var(--swipe-start-transform, translateX(0)); opacity: var(--swipe-start-opacity, 1); }
+    to   { transform: translateX(-100%); opacity: 0.3; }
+  }
+
+  @keyframes swipeOutRight {
+    from { transform: var(--swipe-start-transform, translateX(0)); opacity: var(--swipe-start-opacity, 1); }
+    to   { transform: translateX(100%); opacity: 0.3; }
+  }
+
+  @keyframes swipeInLeft {
+    from { transform: translateX(100%); opacity: 0.3; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+
+  @keyframes swipeInRight {
+    from { transform: translateX(-100%); opacity: 0.3; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+
+  @keyframes edgeBounce {
+    0%   { transform: translateX(0); }
+    30%  { transform: translateX(var(--bounce-dir, 12px)); }
+    60%  { transform: translateX(calc(var(--bounce-dir, 12px) * -0.3)); }
+    100% { transform: translateX(0); }
+  }
+} /* end @media (hover: none) */
+
