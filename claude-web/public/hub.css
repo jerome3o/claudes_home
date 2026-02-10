@@ -30,7 +30,7 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  line-height: 1.6;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
@@ -52,8 +52,8 @@ body {
   z-index: 100;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
 }
@@ -61,7 +61,7 @@ body {
 .hub-back-link {
   color: var(--text-secondary);
   text-decoration: none;
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   line-height: 1;
   padding: 0.25rem;
   border-radius: var(--radius);
@@ -74,7 +74,7 @@ body {
 }
 
 .hub-title {
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 600;
   flex: 1;
 }
@@ -89,7 +89,7 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 1rem;
+  padding: 0.5rem 0.75rem;
   min-width: 0;
 }
 
@@ -104,39 +104,39 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 200px;
+  height: 150px;
   color: var(--text-tertiary);
-  font-size: 1.1rem;
+  font-size: 0.95rem;
 }
 
 /* Sections */
 .hub-section {
-  margin-bottom: 2rem;
+  margin-bottom: 1rem;
 }
 
 .hub-section-title {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-tertiary);
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
   border-bottom: 1px solid var(--border-color);
 }
 
 /* Topic Cards */
 .hub-topic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
 }
 
 .hub-topic-card {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -154,9 +154,9 @@ body {
 }
 
 .hub-topic-icon {
-  font-size: 1.8rem;
+  font-size: 1.2rem;
   flex-shrink: 0;
-  width: 2.5rem;
+  width: 1.5rem;
   text-align: center;
 }
 
@@ -168,7 +168,7 @@ body {
 .hub-topic-name {
   display: block;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -176,7 +176,7 @@ body {
 
 .hub-topic-desc {
   display: block;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -184,40 +184,40 @@ body {
 }
 
 .hub-topic-count {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
 .hub-empty {
   text-align: center;
-  padding: 3rem 1rem;
+  padding: 1.5rem 0.75rem;
   color: var(--text-tertiary);
 }
 
 .hub-empty-icon {
-  font-size: 3rem;
-  margin-bottom: 0.5rem;
+  font-size: 2rem;
+  margin-bottom: 0.35rem;
 }
 
 .hub-empty-text {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
 }
 
 /* Topic Header (detail view) */
 .hub-topic-detail-header {
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .hub-topic-detail-header h2 {
-  font-size: 1.4rem;
-  margin-bottom: 0.25rem;
+  font-size: 1.1rem;
+  margin-bottom: 0.2rem;
 }
 
 .hub-topic-detail-header .hub-topic-desc {
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   white-space: normal;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .hub-topic-actions {
@@ -230,11 +230,11 @@ body {
 .hub-back {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.2rem;
   color: var(--accent-color);
   text-decoration: none;
-  font-size: 0.85rem;
-  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
   transition: color 0.15s;
 }
 
@@ -246,12 +246,12 @@ body {
 .hub-post-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
 .hub-post-item {
   display: block;
-  padding: 0.875rem 1rem;
+  padding: 0.6rem 0.75rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
@@ -270,8 +270,8 @@ body {
 
 .hub-post-item-title {
   font-weight: 600;
-  font-size: 1rem;
-  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.2rem;
   line-height: 1.3;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -280,9 +280,9 @@ body {
 .hub-post-item-meta {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   flex-wrap: wrap;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   color: var(--text-tertiary);
 }
 
@@ -292,8 +292,8 @@ body {
 }
 
 .hub-post-item-snippet {
-  margin-top: 0.35rem;
-  font-size: 0.85rem;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -304,13 +304,13 @@ body {
 
 /* Post Detail */
 .hub-post-detail {
-  margin-bottom: 2rem;
+  margin-bottom: 1rem;
 }
 
 .hub-post-title {
-  font-size: 1.5rem;
+  font-size: 1.1rem;
   font-weight: 700;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
   line-height: 1.3;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -319,14 +319,14 @@ body {
 .hub-post-meta {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-  font-size: 0.85rem;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
   flex-wrap: wrap;
 }
 
 .hub-post-body {
-  padding: 1.25rem;
+  padding: 0.75rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -338,10 +338,10 @@ body {
 .hub-author {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.15rem 0.5rem;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -357,7 +357,7 @@ body {
 
 .hub-time {
   color: var(--text-tertiary);
-  font-size: 0.8rem;
+  font-size: 0.7rem;
 }
 
 /* Comments Section */
@@ -366,17 +366,17 @@ body {
 }
 
 .hub-comments-section h3 {
-  font-size: 1rem;
-  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.6rem;
   color: var(--text-secondary);
 }
 
 .hub-comment-form {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  padding: 0.75rem;
+  padding: 0.5rem;
 }
 
 .hub-comment-form textarea {
@@ -385,9 +385,9 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   color: var(--text-primary);
-  padding: 0.625rem;
+  padding: 0.5rem;
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   resize: vertical;
   min-height: 3rem;
 }
@@ -430,7 +430,7 @@ body {
 }
 
 .hub-comment {
-  padding: 0.75rem 0;
+  padding: 0.5rem 0;
   border-top: 1px solid var(--border-color);
 }
 
@@ -438,22 +438,22 @@ body {
   border-top: none;
 }
 
-.hub-comment[data-depth="1"] { padding-left: 1.5rem; }
-.hub-comment[data-depth="2"] { padding-left: 3rem; }
-.hub-comment[data-depth="3"] { padding-left: 4.5rem; }
-.hub-comment[data-depth="4"] { padding-left: 6rem; }
+.hub-comment[data-depth="1"] { padding-left: 1rem; }
+.hub-comment[data-depth="2"] { padding-left: 2rem; }
+.hub-comment[data-depth="3"] { padding-left: 3rem; }
+.hub-comment[data-depth="4"] { padding-left: 4rem; }
 
 .hub-comment-meta {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
-  font-size: 0.8rem;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
   flex-wrap: wrap;
 }
 
 .hub-comment-content {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   overflow-wrap: break-word;
   word-break: break-word;
   min-width: 0;
@@ -517,11 +517,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.3rem;
-  padding: 0.5rem 1rem;
+  gap: 0.25rem;
+  padding: 0.3rem 0.6rem;
   border: none;
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
@@ -552,8 +552,8 @@ body {
 }
 
 .hub-btn-sm {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
 }
 
 .hub-btn-outline {
@@ -623,12 +623,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem;
+  padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
 }
 
 .hub-modal-header h2 {
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 600;
 }
 
@@ -636,7 +636,7 @@ body {
   background: none;
   border: none;
   color: var(--text-tertiary);
-  font-size: 1.5rem;
+  font-size: 1.2rem;
   cursor: pointer;
   padding: 0.25rem;
   line-height: 1;
@@ -650,7 +650,7 @@ body {
 }
 
 .hub-modal-body {
-  padding: 1.25rem;
+  padding: 0.75rem;
   overflow-y: auto;
   flex: 1;
 }
@@ -659,13 +659,13 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
-  padding: 1rem 1.25rem;
+  padding: 0.6rem 0.75rem;
   border-top: 1px solid var(--border-color);
 }
 
 /* Form Fields */
 .hub-field {
-  margin-bottom: 1rem;
+  margin-bottom: 0.6rem;
 }
 
 .hub-field:last-child {
@@ -674,12 +674,12 @@ body {
 
 .hub-field label {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-tertiary);
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.3rem;
 }
 
 .hub-field input[type="text"],
@@ -689,9 +689,9 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   color: var(--text-primary);
-  padding: 0.625rem;
+  padding: 0.5rem;
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .hub-field input[type="text"]:focus,
@@ -752,8 +752,8 @@ body {
 
 /* Preview */
 .hub-preview {
-  min-height: 200px;
-  padding: 0.75rem;
+  min-height: 150px;
+  padding: 0.5rem;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
@@ -784,28 +784,28 @@ body {
 
 /* Markdown Content */
 .hub-markdown {
-  line-height: 1.7;
+  line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: break-word;
   min-width: 0;
 }
 
 .hub-markdown h1, .hub-markdown h2, .hub-markdown h3 {
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
+  margin-top: 0.75rem;
+  margin-bottom: 0.35rem;
   font-weight: 600;
 }
 
-.hub-markdown h1 { font-size: 1.4rem; }
-.hub-markdown h2 { font-size: 1.2rem; }
-.hub-markdown h3 { font-size: 1.05rem; }
+.hub-markdown h1 { font-size: 1.15rem; }
+.hub-markdown h2 { font-size: 1.05rem; }
+.hub-markdown h3 { font-size: 0.95rem; }
 
 .hub-markdown p {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .hub-markdown ul, .hub-markdown ol {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
   padding-left: 1.5rem;
 }
 
@@ -825,9 +825,9 @@ body {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  padding: 0.75rem;
+  padding: 0.5rem;
   overflow-x: auto;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 .hub-markdown pre code {
@@ -839,8 +839,8 @@ body {
 
 .hub-markdown blockquote {
   border-left: 3px solid var(--accent-color);
-  padding-left: 0.75rem;
-  margin: 0.75rem 0;
+  padding-left: 0.6rem;
+  margin: 0.5rem 0;
   color: var(--text-secondary);
 }
 
@@ -882,7 +882,7 @@ body {
 .hub-markdown hr {
   border: none;
   border-top: 1px solid var(--border-color);
-  margin: 1rem 0;
+  margin: 0.6rem 0;
 }
 
 /* Responsive */
@@ -892,13 +892,13 @@ body {
   }
 
   .hub-post-title {
-    font-size: 1.2rem;
+    font-size: 1rem;
   }
 
-  .hub-comment[data-depth="1"] { padding-left: 1rem; }
-  .hub-comment[data-depth="2"] { padding-left: 2rem; }
-  .hub-comment[data-depth="3"] { padding-left: 3rem; }
-  .hub-comment[data-depth="4"] { padding-left: 3.5rem; }
+  .hub-comment[data-depth="1"] { padding-left: 0.75rem; }
+  .hub-comment[data-depth="2"] { padding-left: 1.5rem; }
+  .hub-comment[data-depth="3"] { padding-left: 2.25rem; }
+  .hub-comment[data-depth="4"] { padding-left: 2.75rem; }
 
   .hub-modal-content {
     max-height: 95vh;
