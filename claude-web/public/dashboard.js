@@ -115,7 +115,7 @@ async function loadActivityChart() {
   const labels = data.map(d => formatHour(d.hour));
   const userCounts = data.map(d => d.user || 0);
   const assistantCounts = data.map(d => d.assistant || 0);
-  const systemCounts = data.map(d => d.system || 0);
+  const botCounts = data.map(d => d.bot || 0);
 
   const config = {
     type: 'bar',
@@ -123,7 +123,7 @@ async function loadActivityChart() {
       labels,
       datasets: [
         {
-          label: 'User',
+          label: 'Human',
           data: userCounts,
           backgroundColor: 'rgba(99, 102, 241, 0.7)',
           borderColor: '#6366f1',
@@ -139,10 +139,10 @@ async function loadActivityChart() {
           borderRadius: 2,
         },
         {
-          label: 'System',
-          data: systemCounts,
-          backgroundColor: 'rgba(136, 136, 136, 0.5)',
-          borderColor: '#888',
+          label: 'Bot / Notifications',
+          data: botCounts,
+          backgroundColor: 'rgba(251, 191, 36, 0.6)',
+          borderColor: '#f59e0b',
           borderWidth: 1,
           borderRadius: 2,
         }
