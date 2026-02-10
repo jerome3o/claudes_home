@@ -3030,3 +3030,294 @@ document.addEventListener('keydown', (e) => {
 
 // Load tasks on init
 loadTasks();
+
+// ============================
+// Swipe Gesture Navigation Between Sessions
+// ============================
+// Allows users to swipe left/right on the message area to switch sessions,
+// matching the sort order shown in the sidebar.
+// Only active on touch devices (@media (hover: none) is handled in CSS).
+
+(function initSwipeNavigator() {
+  const swipeMessages = document.getElementById('messages');
+  const swipePreview = document.getElementById('swipePreview');
+  if (!swipeMessages || !swipePreview) return;
+
+  // --- Configuration ---
+  const DEAD_ZONE     = 10;   // px before deciding horizontal vs vertical
+  const SWIPE_THRESH  = 80;   // px horizontal to commit a session switch
+  const MAX_VERTICAL  = 50;   // px vertical allowed during a horizontal swipe
+  const OPACITY_FACTOR = 0.002; // opacity reduction per px of delta
+  const PILL_FADE_START = 30; // px delta when pill starts appearing
+  const PILL_FADE_FULL  = 60; // px delta when pill fully visible
+
+  // --- Touch tracking state ---
+  let startX = 0, startY = 0;
+  let deltaX = 0, deltaY = 0;
+  let axisLocked = null;  // null | 'horizontal' | 'vertical'
+  let isSwiping = false;
+  let targetIndex = -1;
+
+  /**
+   * Returns sessions sorted the same way as the sidebar:
+   * - Sessions with isSending (for current session) are treated as "active query" first
+   * - Then sorted by lastActive descending (most recent first)
+   * Since we don't have per-session query state, we use the sessions array order
+   * which comes from the server sorted by lastActive desc.
+   */
+  function getSortedSessions() {
+    // sessions array is already sorted by the server (lastActive desc)
+    // Return a shallow copy to avoid mutating the global array
+    return sessions.slice();
+  }
+
+  /** Find the index of the current session in the sorted list */
+  function getCurrentIndex(sorted) {
+    return sorted.findIndex(s => s.id === currentSessionId);
+  }
+
+  /** Check if swipe should be blocked (modals, input focus, panels open) */
+  function isSwipeBlocked() {
+    // Text input focused — user might be selecting/typing
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      return true;
+    }
+
+    // VNC viewer visible
+    const vnc = document.getElementById('vncViewer');
+    if (vnc && vnc.style.display !== 'none') return true;
+
+    // File panel open
+    const fp = document.getElementById('filePanel');
+    if (fp && fp.style.display !== 'none') return true;
+
+    // Modals: MCP config, file viewer, task editor, task runs
+    const modals = ['mcpModal', 'fileViewerModal', 'taskEditorModal', 'taskRunsModal'];
+    for (const id of modals) {
+      const el = document.getElementById(id);
+      if (el && (el.classList.contains('open') || el.style.display === 'flex' || el.style.display === 'block')) {
+        return true;
+      }
+    }
+
+    // Sidebar open on mobile
+    const sb = document.getElementById('sidebar');
+    if (sb && sb.classList.contains('open')) return true;
+
+    return false;
+  }
+
+  /** Show the preview pill with target session info */
+  function showPreviewPill(session, direction, progress) {
+    if (!session) { hidePreviewPill(); return; }
+
+    const arrow = direction === 'left' ? '→' : '←';
+    // Check if target session has an active query (isSending only tracks current)
+    // We show a green dot based on unread counts as a proxy for activity
+    const hasActivity = unreadCounts[session.id] > 0;
+    const dot = hasActivity ? '<span class="swipe-dot"></span>' : '';
+
+    swipePreview.innerHTML = `<span class="swipe-arrow">${arrow}</span>${dot}${escapeHtml(session.name)}`;
+    swipePreview.style.display = 'block';
+
+    // Fade pill in based on swipe progress
+    const pillOpacity = Math.min(1, Math.max(0, (progress - PILL_FADE_START) / (PILL_FADE_FULL - PILL_FADE_START)));
+    swipePreview.classList.toggle('visible', pillOpacity > 0);
+    swipePreview.style.opacity = pillOpacity;
+  }
+
+  function hidePreviewPill() {
+    swipePreview.classList.remove('visible');
+    swipePreview.style.display = 'none';
+    swipePreview.style.opacity = 0;
+  }
+
+  /** Reset message container transform */
+  function resetTransform() {
+    swipeMessages.style.transform = '';
+    swipeMessages.style.opacity = '';
+    swipeMessages.classList.remove('swiping');
+    axisLocked = null;
+    isSwiping = false;
+    targetIndex = -1;
+  }
+
+  // --- Touch event handlers ---
+
+  function onTouchStart(e) {
+    if (isSwipeBlocked()) return;
+    if (e.touches.length !== 1) return; // Only single-finger swipe
+
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    deltaX = 0;
+    deltaY = 0;
+    axisLocked = null;
+    isSwiping = false;
+    targetIndex = -1;
+  }
+
+  function onTouchMove(e) {
+    if (isSwipeBlocked()) return;
+    if (e.touches.length !== 1) return;
+    if (axisLocked === 'vertical') return; // Already decided it's a scroll
+
+    const x = e.touches[0].clientX;
+    const y = e.touches[0].clientY;
+    deltaX = x - startX;
+    deltaY = y - startY;
+    const absDX = Math.abs(deltaX);
+    const absDY = Math.abs(deltaY);
+
+    // Dead zone — haven't moved enough to decide yet
+    if (!axisLocked && absDX < DEAD_ZONE && absDY < DEAD_ZONE) return;
+
+    // Decide axis lock
+    if (!axisLocked) {
+      if (absDY > absDX) {
+        axisLocked = 'vertical';
+        return; // Let the browser handle vertical scroll
+      }
+      axisLocked = 'horizontal';
+      isSwiping = true;
+      swipeMessages.classList.add('swiping');
+    }
+
+    // If vertical exceeded limit, cancel horizontal swipe
+    if (absDY > MAX_VERTICAL) {
+      resetTransform();
+      hidePreviewPill();
+      return;
+    }
+
+    // Prevent vertical scroll while swiping horizontally
+    e.preventDefault();
+
+    // Determine target session
+    const sorted = getSortedSessions();
+    const curIdx = getCurrentIndex(sorted);
+    if (curIdx === -1) return;
+
+    // Swiping left (deltaX < 0) → next session; swiping right (deltaX > 0) → previous session
+    let nextIdx;
+    if (deltaX < 0) {
+      nextIdx = curIdx + 1; // Next session
+    } else {
+      nextIdx = curIdx - 1; // Previous session
+    }
+
+    // Edge detection — at boundary, apply resistance
+    const atEdge = nextIdx < 0 || nextIdx >= sorted.length;
+    let effectiveDelta = deltaX;
+
+    if (atEdge) {
+      // Rubber-band: reduce delta to 1/3 for resistance feel
+      effectiveDelta = deltaX / 3;
+      targetIndex = -1;
+      hidePreviewPill();
+    } else {
+      targetIndex = nextIdx;
+      const direction = deltaX < 0 ? 'left' : 'right';
+      showPreviewPill(sorted[nextIdx], direction, absDX);
+    }
+
+    // Apply transform and opacity to messages container
+    swipeMessages.style.transform = `translateX(${effectiveDelta}px)`;
+    swipeMessages.style.opacity = Math.max(0.5, 1 - absDX * OPACITY_FACTOR);
+  }
+
+  function onTouchEnd(e) {
+    if (!isSwiping) return;
+
+    const absDX = Math.abs(deltaX);
+    const sorted = getSortedSessions();
+    const curIdx = getCurrentIndex(sorted);
+
+    // Determine if we commit or snap back
+    const atEdge = targetIndex < 0 || targetIndex >= sorted.length;
+
+    if (atEdge) {
+      // Edge bounce animation
+      const bounceDir = deltaX > 0 ? '12px' : '-12px';
+      swipeMessages.style.transform = '';
+      swipeMessages.style.opacity = '';
+      swipeMessages.classList.remove('swiping');
+      swipeMessages.style.setProperty('--bounce-dir', bounceDir);
+      swipeMessages.classList.add('swipe-edge-bounce');
+      swipeMessages.addEventListener('animationend', function handler() {
+        swipeMessages.classList.remove('swipe-edge-bounce');
+        swipeMessages.removeEventListener('animationend', handler);
+      });
+      hidePreviewPill();
+      axisLocked = null;
+      isSwiping = false;
+      targetIndex = -1;
+      return;
+    }
+
+    if (absDX >= SWIPE_THRESH && targetIndex >= 0 && targetIndex < sorted.length) {
+      // Commit: animate slide out, switch session, animate slide in
+      const swipeDir = deltaX < 0 ? 'left' : 'right';
+      const targetSession = sorted[targetIndex];
+
+      // Set CSS custom properties for the animation start position
+      swipeMessages.style.setProperty('--swipe-start-transform', `translateX(${deltaX}px)`);
+      swipeMessages.style.setProperty('--swipe-start-opacity', swipeMessages.style.opacity || '1');
+      swipeMessages.classList.remove('swiping');
+
+      // Slide out
+      swipeMessages.classList.add(`swipe-out-${swipeDir}`);
+      hidePreviewPill();
+
+      swipeMessages.addEventListener('animationend', function slideOutDone() {
+        swipeMessages.removeEventListener('animationend', slideOutDone);
+        swipeMessages.classList.remove(`swipe-out-${swipeDir}`);
+        swipeMessages.style.transform = '';
+        swipeMessages.style.opacity = '';
+
+        // Switch session
+        selectSession(targetSession.id);
+
+        // Slide in from opposite side
+        const slideInDir = swipeDir === 'left' ? 'left' : 'right';
+        swipeMessages.classList.add(`swipe-in-${slideInDir}`);
+
+        swipeMessages.addEventListener('animationend', function slideInDone() {
+          swipeMessages.removeEventListener('animationend', slideInDone);
+          swipeMessages.classList.remove(`swipe-in-${slideInDir}`);
+        });
+      });
+    } else {
+      // Snap back — didn't reach threshold
+      swipeMessages.classList.remove('swiping');
+      swipeMessages.classList.add('swipe-snap-back');
+      hidePreviewPill();
+
+      swipeMessages.addEventListener('transitionend', function snapDone() {
+        swipeMessages.removeEventListener('transitionend', snapDone);
+        swipeMessages.classList.remove('swipe-snap-back');
+        swipeMessages.style.transform = '';
+        swipeMessages.style.opacity = '';
+      });
+
+      // Fallback: in case transitionend doesn't fire
+      setTimeout(() => {
+        swipeMessages.classList.remove('swipe-snap-back');
+        swipeMessages.style.transform = '';
+        swipeMessages.style.opacity = '';
+      }, 300);
+    }
+
+    axisLocked = null;
+    isSwiping = false;
+    targetIndex = -1;
+  }
+
+  // --- Attach touch listeners (passive: false for touchmove so we can preventDefault) ---
+  swipeMessages.addEventListener('touchstart', onTouchStart, { passive: true });
+  swipeMessages.addEventListener('touchmove', onTouchMove, { passive: false });
+  swipeMessages.addEventListener('touchend', onTouchEnd, { passive: true });
+
+  console.log('Swipe gesture navigation initialized');
+})();
