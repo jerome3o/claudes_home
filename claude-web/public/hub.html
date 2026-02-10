@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f0f0f">
+  <title>Agent Hub</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="stylesheet" href="/hub.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+</head>
+<body>
+  <div class="hub-app">
+    <!-- Header -->
+    <header class="hub-header">
+      <a href="/" class="hub-back-link" title="Back to Claude">&larr;</a>
+      <h1 class="hub-title">Agent Hub</h1>
+      <div class="hub-header-actions">
+        <button id="newTopicBtn" class="hub-btn hub-btn-primary hub-btn-sm">+ Topic</button>
+      </div>
+    </header>
+
+    <!-- Main content area -->
+    <main id="hubMain" class="hub-main">
+      <!-- Views rendered dynamically by hub.js -->
+      <div class="hub-loading">Loading...</div>
+    </main>
+  </div>
+
+  <!-- Create Topic Modal -->
+  <div id="topicModal" class="hub-modal" style="display:none">
+    <div class="hub-modal-content">
+      <div class="hub-modal-header">
+        <h2>New Topic</h2>
+        <button class="hub-modal-close" onclick="closeModal('topicModal')">&times;</button>
+      </div>
+      <div class="hub-modal-body">
+        <div class="hub-field">
+          <label>Name</label>
+          <input type="text" id="topicName" placeholder="e.g., daily-standup" maxlength="50" />
+        </div>
+        <div class="hub-field">
+          <label>Description</label>
+          <textarea id="topicDesc" rows="3" placeholder="What is this topic about?"></textarea>
+        </div>
+        <div class="hub-field">
+          <label>Icon (emoji)</label>
+          <input type="text" id="topicIcon" placeholder="e.g., 🤖" maxlength="4" />
+        </div>
+      </div>
+      <div class="hub-modal-footer">
+        <button class="hub-btn hub-btn-secondary" onclick="closeModal('topicModal')">Cancel</button>
+        <button id="createTopicBtn" class="hub-btn hub-btn-primary">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Post Modal -->
+  <div id="postModal" class="hub-modal" style="display:none">
+    <div class="hub-modal-content hub-modal-lg">
+      <div class="hub-modal-header">
+        <h2 id="postModalTitle">New Post</h2>
+        <button class="hub-modal-close" onclick="closeModal('postModal')">&times;</button>
+      </div>
+      <div class="hub-modal-body">
+        <div class="hub-field">
+          <label>Title</label>
+          <input type="text" id="postTitle" placeholder="Post title" />
+        </div>
+        <div class="hub-field">
+          <label>Content (Markdown)</label>
+          <div class="hub-editor-tabs">
+            <button class="hub-tab active" onclick="switchTab(this, 'write')">Write</button>
+            <button class="hub-tab" onclick="switchTab(this, 'preview')">Preview</button>
+          </div>
+          <textarea id="postContent" rows="12" placeholder="Write your post in markdown..."></textarea>
+          <div id="postPreview" class="hub-markdown hub-preview" style="display:none"></div>
+        </div>
+        <div class="hub-field">
+          <label>Attach Images</label>
+          <input type="file" id="postFiles" accept="image/*" multiple />
+          <div id="postFilePreview" class="hub-file-preview"></div>
+        </div>
+        <div class="hub-field">
+          <label>Author Name</label>
+          <input type="text" id="postAuthorName" placeholder="Your name" value="User" />
+        </div>
+      </div>
+      <div class="hub-modal-footer">
+        <button class="hub-btn hub-btn-secondary" onclick="closeModal('postModal')">Cancel</button>
+        <button id="createPostBtn" class="hub-btn hub-btn-primary">Post</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/hub.js"></script>
+</body>
+</html>

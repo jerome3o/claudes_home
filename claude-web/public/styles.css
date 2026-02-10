@@ -99,6 +99,47 @@ body {
   margin-top: auto;
 }
 
+.new-session-form {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.new-session-input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.4rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.new-session-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.new-session-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.new-session-actions .btn-sm {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.new-session-actions .btn-primary.btn-sm {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;
@@ -143,6 +184,15 @@ body {
 .session-item .session-time {
   font-size: 0.75rem;
   color: var(--text-tertiary);
+}
+
+.session-item .session-folder {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
 }
 
 /* Main */

@@ -157,12 +157,13 @@ async function init() {
   connectWebSocket();
   await loadSessions();
 
-  // Restore session after refresh if available
-  const restoreId = sessionStorage.getItem('claude_restore_session');
+  // Restore session: explicit refresh override > localStorage persist > first session
+  const refreshRestore = sessionStorage.getItem('claude_restore_session');
   sessionStorage.removeItem('claude_restore_session');
+  const lastActiveId = refreshRestore || localStorage.getItem('claude_active_session');
 
-  if (restoreId && sessions.find(s => s.id === restoreId)) {
-    selectSession(restoreId);
+  if (lastActiveId && sessions.find(s => s.id === lastActiveId)) {
+    selectSession(lastActiveId);
   } else if (sessions.length === 0) {
     await createSession('New Session');
   } else {
@@ -174,10 +175,42 @@ function setupEventListeners() {
   menuBtn.addEventListener('click', () => sidebar.classList.add('open'));
   closeSidebar.addEventListener('click', () => sidebar.classList.remove('open'));
 
-  newSessionBtn.addEventListener('click', async () => {
-    const name = `Session ${sessions.length + 1}`;
-    await createSession(name);
+  const newSessionForm = document.getElementById('newSessionForm');
+  const newSessionNameInput = document.getElementById('newSessionName');
+  const newSessionFolderInput = document.getElementById('newSessionFolder');
+  const newSessionCreateBtn = document.getElementById('newSessionCreate');
+  const newSessionCancelBtn = document.getElementById('newSessionCancel');
+
+  newSessionBtn.addEventListener('click', () => {
+    newSessionNameInput.value = `Session ${sessions.length + 1}`;
+    newSessionFolderInput.value = '';
+    newSessionForm.style.display = newSessionForm.style.display === 'none' ? 'block' : 'none';
+    if (newSessionForm.style.display === 'block') {
+      newSessionNameInput.focus();
+      newSessionNameInput.select();
+    }
+  });
+
+  newSessionCreateBtn.addEventListener('click', async () => {
+    const name = newSessionNameInput.value.trim() || `Session ${sessions.length + 1}`;
+    const folder = newSessionFolderInput.value.trim() || null;
+    await createSession(name, folder);
+    newSessionForm.style.display = 'none';
     sidebar.classList.remove('open');
+  });
+
+  newSessionCancelBtn.addEventListener('click', () => {
+    newSessionForm.style.display = 'none';
+  });
+
+  newSessionNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') newSessionCreateBtn.click();
+    if (e.key === 'Escape') newSessionCancelBtn.click();
+  });
+
+  newSessionFolderInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') newSessionCreateBtn.click();
+    if (e.key === 'Escape') newSessionCancelBtn.click();
   });
 
   sendBtn.addEventListener('click', sendMessage);
@@ -624,11 +657,16 @@ function renderSessions() {
       : '';
     const unreadClass = unread > 0 ? ' has-unread' : '';
 
+    const folderHint = session.folder
+      ? `<div class="session-folder" title="${escapeHtml(session.folder)}">📁 ${escapeHtml(session.folder.split('/').pop() || session.folder)}</div>`
+      : '';
+
     return `
       <div class="session-item ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
            data-id="${session.id}">
         <div class="session-item-content">
           <div class="session-name">${escapeHtml(session.name)}${unreadBadge}</div>
+          ${folderHint}
           <div class="session-time">${timeStr}</div>
         </div>
         <div class="session-actions">
@@ -714,6 +752,9 @@ async function selectSession(sessionId) {
 
   currentSessionId = sessionId;
   currentSdkSessionId = null; // Will be loaded from server
+
+  // Persist active session so it survives app backgrounding / PWA reload
+  try { localStorage.setItem('claude_active_session', sessionId); } catch(e) {}
 
   // Clear unread for this session
   delete unreadCounts[sessionId];

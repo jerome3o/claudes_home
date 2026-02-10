@@ -26,6 +26,15 @@
 
       <button id="newSessionBtn" class="btn-primary">+ New Session</button>
 
+      <div id="newSessionForm" class="new-session-form" style="display: none;">
+        <input type="text" id="newSessionName" placeholder="Session name" class="new-session-input" />
+        <input type="text" id="newSessionFolder" placeholder="Working folder (optional)" class="new-session-input" />
+        <div class="new-session-actions">
+          <button id="newSessionCreate" class="btn-primary btn-sm">Create</button>
+          <button id="newSessionCancel" class="btn-sm">Cancel</button>
+        </div>
+      </div>
+
       <div id="sessionList" class="session-list"></div>
 
       <!-- Scheduled Tasks Section -->
@@ -38,6 +47,7 @@
       </div>
 
       <div class="sidebar-footer">
+        <a href="/hub" class="btn-secondary" style="display:block;text-align:center;margin-bottom:0.5rem;text-decoration:none;">🏛️ Agent Hub</a>
         <button id="refreshAppBtn" class="btn-secondary">🔄 Refresh App</button>
         <button id="mcpConfigBtn" class="btn-secondary">⚙️ MCP Config</button>
       </div>
