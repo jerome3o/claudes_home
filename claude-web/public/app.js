@@ -682,6 +682,55 @@ async function loadSessions() {
   }
 }
 
+function groupSessionsByPrefix(sessions) {
+  const groups = {};
+  const ungrouped = [];
+
+  for (const session of sessions) {
+    const slashIndex = session.name.indexOf('/');
+    if (slashIndex > 0 && slashIndex < 20) {
+      const prefix = session.name.substring(0, slashIndex);
+      if (!groups[prefix]) groups[prefix] = [];
+      groups[prefix].push(session);
+    } else {
+      ungrouped.push(session);
+    }
+  }
+
+  return { groups, ungrouped };
+}
+
+function renderSessionItem(session) {
+  const isActive = sessionQueryStates[session.id];
+  const unreadCount = unreadCounts[session.id] || 0;
+  const unreadClass = unreadCount > 0 ? ' has-unread' : '';
+
+  // Strip prefix for display if it has a folder
+  const slashIndex = session.name.indexOf('/');
+  const displayName = (slashIndex > 0 && slashIndex < 20)
+    ? session.name.substring(slashIndex + 1)
+    : session.name;
+
+  const timeStr = new Date(session.lastActive).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const statusHtml = isActive
+    ? '<span class="session-activity-dot"></span><span class="session-status-working">Working...</span>'
+    : `<span class="session-time">${timeStr}</span>`;
+
+  return `
+    <div class="session-item compact ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
+         data-id="${session.id}">
+      <div class="session-info-compact">
+        <span class="session-name-compact" title="${escapeHtml(session.name)}">${escapeHtml(displayName)}</span>
+        ${statusHtml}
+      </div>
+      <div class="session-actions">
+        <button class="session-action-btn session-rename-btn" data-id="${session.id}" title="Rename">✏️</button>
+        <button class="session-action-btn session-delete-btn" data-id="${session.id}" title="Delete">✕</button>
+      </div>
+      ${unreadCount > 0 ? `<span class="unread-badge">${unreadCount > 9 ? '9+' : unreadCount}</span>` : ''}
+    </div>`;
+}
+
 function renderSessions() {
   // Sort: active queries first, then by recency
   const sortedSessions = [...sessions].sort((a, b) => {
@@ -691,46 +740,46 @@ function renderSessions() {
     return b.lastActive - a.lastActive;
   });
 
-  sessionList.innerHTML = sortedSessions.map(session => {
-    const date = new Date(session.lastActive);
-    const timeStr = date.toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  const { groups, ungrouped } = groupSessionsByPrefix(sortedSessions);
 
-    const unread = unreadCounts[session.id] || 0;
-    const unreadBadge = unread > 0
-      ? `<span class="session-unread-badge">${unread > 9 ? '9+' : unread}</span>`
-      : '';
-    const unreadClass = unread > 0 ? ' has-unread' : '';
+  // Get collapsed state from localStorage
+  const collapsedFolders = JSON.parse(localStorage.getItem('collapsedFolders') || '{}');
 
-    const isQuerying = sessionQueryStates[session.id];
-    const activityDot = isQuerying ? '<span class="session-activity-dot"></span>' : '';
-    const timeDisplay = isQuerying
-      ? '<div class="session-time querying">Working...</div>'
-      : `<div class="session-time">${timeStr}</div>`;
+  let html = '';
 
-    const folderHint = session.folder
-      ? `<div class="session-folder" title="${escapeHtml(session.folder)}">📁 ${escapeHtml(session.folder.split('/').pop() || session.folder)}</div>`
-      : '';
+  // Render ungrouped sessions first (no folder header)
+  if (ungrouped.length > 0) {
+    const activeCount = ungrouped.filter(s => sessionQueryStates[s.id]).length;
+    html += `<div class="session-folder-header" data-folder="__ungrouped">
+      <span class="folder-chevron">${collapsedFolders['__ungrouped'] ? '▸' : '▾'}</span>
+      <span class="folder-name">Sessions</span>
+      <span class="folder-count">${ungrouped.length}</span>
+      ${activeCount > 0 ? `<span class="folder-active-badge">${activeCount} active</span>` : ''}
+    </div>`;
+    if (!collapsedFolders['__ungrouped']) {
+      html += ungrouped.map(s => renderSessionItem(s)).join('');
+    }
+  }
 
-    return `
-      <div class="session-item ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
-           data-id="${session.id}">
-        <div class="session-item-content">
-          <div class="session-name">${escapeHtml(session.name)}${activityDot}${unreadBadge}</div>
-          ${folderHint}
-          ${timeDisplay}
-        </div>
-        <div class="session-actions">
-          <button class="session-action-btn session-rename-btn" data-id="${session.id}" title="Rename">✏️</button>
-          <button class="session-action-btn session-delete-btn" data-id="${session.id}" title="Delete">✕</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+  // Render grouped sessions
+  const sortedPrefixes = Object.keys(groups).sort();
+  for (const prefix of sortedPrefixes) {
+    const folderSessions = groups[prefix];
+    const activeCount = folderSessions.filter(s => sessionQueryStates[s.id]).length;
+    const isCollapsed = collapsedFolders[prefix];
+
+    html += `<div class="session-folder-header" data-folder="${escapeHtml(prefix)}">
+      <span class="folder-chevron">${isCollapsed ? '▸' : '▾'}</span>
+      <span class="folder-name">${escapeHtml(prefix)}/</span>
+      <span class="folder-count">${folderSessions.length}</span>
+      ${activeCount > 0 ? `<span class="folder-active-badge">${activeCount} active</span>` : ''}
+    </div>`;
+    if (!isCollapsed) {
+      html += folderSessions.map(s => renderSessionItem(s)).join('');
+    }
+  }
+
+  sessionList.innerHTML = html;
 
   // Add click listeners for selecting sessions
   document.querySelectorAll('.session-item').forEach(item => {
@@ -739,6 +788,17 @@ function renderSessions() {
       const id = item.dataset.id;
       selectSession(id);
       sidebar.classList.remove('open');
+    });
+  });
+
+  // Add click handlers for folder headers (toggle collapse)
+  document.querySelectorAll('.session-folder-header').forEach(el => {
+    el.addEventListener('click', () => {
+      const folder = el.dataset.folder;
+      const collapsed = JSON.parse(localStorage.getItem('collapsedFolders') || '{}');
+      collapsed[folder] = !collapsed[folder];
+      localStorage.setItem('collapsedFolders', JSON.stringify(collapsed));
+      renderSessions();
     });
   });
 
