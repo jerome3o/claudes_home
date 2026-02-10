@@ -564,6 +564,7 @@ const allConnections = new Set<WebSocket>();
 // Load/save MCP config (still file-based — small config)
 // ============================
 function loadMcpConfig(): Record<string, McpServerConfig> {
+  // 1. Prefer runtime override from data/mcp-config.json (set via API)
   if (existsSync(MCP_CONFIG_FILE)) {
     try {
       return JSON.parse(readFileSync(MCP_CONFIG_FILE, 'utf-8'));
@@ -571,6 +572,22 @@ function loadMcpConfig(): Record<string, McpServerConfig> {
       console.error('Failed to load MCP config:', e);
     }
   }
+
+  // 2. Fall back to project-root .mcp.json (same file the orchestrator uses)
+  const projectRoot = join(__dirname, '..', '..');
+  const mcpJsonPath = join(projectRoot, '.mcp.json');
+  if (existsSync(mcpJsonPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'));
+      if (raw.mcpServers && typeof raw.mcpServers === 'object') {
+        console.log(`[mcp] Loaded ${Object.keys(raw.mcpServers).length} MCP server(s) from ${mcpJsonPath}`);
+        return raw.mcpServers;
+      }
+    } catch (e) {
+      console.error('Failed to load .mcp.json:', e);
+    }
+  }
+
   return {};
 }
 
