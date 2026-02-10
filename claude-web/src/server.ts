@@ -108,6 +108,49 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id, started_at);
+
+  CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    webhook_path TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, webhook_path)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_webhook_subs_path ON webhook_subscriptions(webhook_path);
+  CREATE INDEX IF NOT EXISTS idx_webhook_subs_session ON webhook_subscriptions(session_id);
+
+  CREATE TABLE IF NOT EXISTS message_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'pending'
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_message_queue_session ON message_queue(session_id, status);
+
+  CREATE TABLE IF NOT EXISTS scheduled_events (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    type TEXT NOT NULL DEFAULT 'task',
+    status TEXT NOT NULL DEFAULT 'pending',
+    scheduled_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    executed_at DATETIME,
+    task_id TEXT,
+    webhook_path TEXT,
+    webhook_data TEXT,
+    session_id TEXT,
+    message_content TEXT,
+    metadata TEXT,
+    error TEXT,
+    result_summary TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scheduled_events_status_time ON scheduled_events(status, scheduled_at);
 `);
 
 // Migrate from JSON if old sessions.json exists and DB is empty
@@ -217,6 +260,59 @@ const stmts = {
   getTaskRuns: db.prepare('SELECT * FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 50'),
   getTaskRun: db.prepare('SELECT * FROM task_runs WHERE id = ?'),
   markInterruptedRuns: db.prepare("UPDATE task_runs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP WHERE status = 'running'"),
+  // Webhook subscriptions
+  getSubscriptionsByPath: db.prepare(
+    'SELECT ws.*, s.name as session_name FROM webhook_subscriptions ws JOIN sessions s ON ws.session_id = s.id WHERE ws.webhook_path = ?'
+  ),
+  getSubscriptionsBySession: db.prepare(
+    'SELECT * FROM webhook_subscriptions WHERE session_id = ?'
+  ),
+  createSubscription: db.prepare(
+    'INSERT OR IGNORE INTO webhook_subscriptions (session_id, webhook_path) VALUES (?, ?)'
+  ),
+  deleteSubscription: db.prepare(
+    'DELETE FROM webhook_subscriptions WHERE session_id = ? AND webhook_path = ?'
+  ),
+  // Message queue
+  enqueueMessage: db.prepare(
+    "INSERT INTO message_queue (session_id, type, content, metadata, status) VALUES (?, ?, ?, ?, 'pending')"
+  ),
+  getPendingMessages: db.prepare(
+    "SELECT * FROM message_queue WHERE session_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 10"
+  ),
+  updateMessageStatus: db.prepare(
+    'UPDATE message_queue SET status = ? WHERE id = ?'
+  ),
+  getQueuedMessageCount: db.prepare(
+    "SELECT COUNT(*) as cnt FROM message_queue WHERE session_id = ? AND status = 'pending'"
+  ),
+  // Scheduled events
+  createEvent: db.prepare(
+    `INSERT INTO scheduled_events (id, name, type, status, scheduled_at, task_id, webhook_path, webhook_data, session_id, message_content, metadata)
+     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`
+  ),
+  getEvent: db.prepare('SELECT * FROM scheduled_events WHERE id = ?'),
+  updateEvent: db.prepare(
+    `UPDATE scheduled_events SET name=?, scheduled_at=?, task_id=?, webhook_path=?, webhook_data=?, session_id=?, message_content=?, metadata=? WHERE id=? AND status='pending'`
+  ),
+  cancelEvent: db.prepare(
+    `UPDATE scheduled_events SET status='cancelled' WHERE id=? AND status='pending'`
+  ),
+  getDueEvents: db.prepare(
+    `SELECT * FROM scheduled_events WHERE status='pending' AND scheduled_at <= datetime('now') ORDER BY scheduled_at ASC LIMIT 20`
+  ),
+  getUpcomingEvents: db.prepare(
+    `SELECT * FROM scheduled_events WHERE status='pending' ORDER BY scheduled_at ASC LIMIT 100`
+  ),
+  getAllEvents: db.prepare(
+    `SELECT * FROM scheduled_events ORDER BY scheduled_at DESC LIMIT 100`
+  ),
+  updateEventStatus: db.prepare(
+    `UPDATE scheduled_events SET status=?, executed_at=CURRENT_TIMESTAMP, error=?, result_summary=? WHERE id=?`
+  ),
+  markEventRunning: db.prepare(
+    `UPDATE scheduled_events SET status='running' WHERE id=? AND status='pending'`
+  ),
 };
 
 // Session interfaces (for type safety)
@@ -885,17 +981,228 @@ Schedule: "${description}"`;
 });
 
 // ============================
+// Scheduled Events API
+// ============================
+
+// List events (optionally filter by status)
+app.get('/api/events', (req, res) => {
+  const status = req.query.status as string;
+  if (status === 'pending') {
+    res.json(stmts.getUpcomingEvents.all());
+  } else {
+    res.json(stmts.getAllEvents.all());
+  }
+});
+
+// Get a single event
+app.get('/api/events/:id', (req, res) => {
+  const event = stmts.getEvent.get(req.params.id);
+  if (!event) {
+    res.status(404).json({ error: 'Event not found' });
+    return;
+  }
+  res.json(event);
+});
+
+// Create a scheduled event
+app.post('/api/events', (req, res) => {
+  const { name, type, scheduled_at, delay_seconds, task_id, webhook_path,
+          webhook_data, session_id, message_content, metadata } = req.body;
+
+  if (!type) {
+    res.status(400).json({ error: 'type is required (task, webhook, or message)' });
+    return;
+  }
+
+  if (!scheduled_at && !delay_seconds) {
+    res.status(400).json({ error: 'Either scheduled_at or delay_seconds is required' });
+    return;
+  }
+
+  // Validate type-specific requirements
+  if (type === 'task' && !task_id) {
+    res.status(400).json({ error: 'task_id is required for task events' });
+    return;
+  }
+  if (type === 'webhook' && !webhook_path) {
+    res.status(400).json({ error: 'webhook_path is required for webhook events' });
+    return;
+  }
+  if (type === 'message' && (!session_id || !message_content)) {
+    res.status(400).json({ error: 'session_id and message_content are required for message events' });
+    return;
+  }
+
+  const id = randomUUID();
+  const fireAt = scheduled_at
+    ? new Date(scheduled_at).toISOString()
+    : new Date(Date.now() + Number(delay_seconds) * 1000).toISOString();
+
+  stmts.createEvent.run(
+    id,
+    name || null,
+    type,
+    fireAt,
+    task_id || null,
+    webhook_path || null,
+    webhook_data ? JSON.stringify(webhook_data) : null,
+    session_id || null,
+    message_content || null,
+    metadata ? JSON.stringify(metadata) : null
+  );
+
+  const event = stmts.getEvent.get(id);
+  console.log(`[events] Created event "${name || id}" (type: ${type}) scheduled for ${fireAt}`);
+  res.json(event);
+});
+
+// Update a pending event
+app.put('/api/events/:id', (req, res) => {
+  const existing = stmts.getEvent.get(req.params.id) as any;
+  if (!existing) {
+    res.status(404).json({ error: 'Event not found' });
+    return;
+  }
+  if (existing.status !== 'pending') {
+    res.status(400).json({ error: `Cannot update event with status "${existing.status}"` });
+    return;
+  }
+
+  const { name, scheduled_at, delay_seconds, task_id, webhook_path,
+          webhook_data, session_id, message_content, metadata } = req.body;
+
+  const newScheduledAt = delay_seconds
+    ? new Date(Date.now() + Number(delay_seconds) * 1000).toISOString()
+    : (scheduled_at ? new Date(scheduled_at).toISOString() : existing.scheduled_at);
+
+  stmts.updateEvent.run(
+    name ?? existing.name,
+    newScheduledAt,
+    task_id ?? existing.task_id,
+    webhook_path ?? existing.webhook_path,
+    webhook_data !== undefined ? JSON.stringify(webhook_data) : existing.webhook_data,
+    session_id ?? existing.session_id,
+    message_content ?? existing.message_content,
+    metadata !== undefined ? JSON.stringify(metadata) : existing.metadata,
+    req.params.id
+  );
+
+  const updated = stmts.getEvent.get(req.params.id);
+  console.log(`[events] Updated event "${req.params.id}"`);
+  res.json(updated);
+});
+
+// Cancel a pending event
+app.delete('/api/events/:id', (req, res) => {
+  const existing = stmts.getEvent.get(req.params.id) as any;
+  if (!existing) {
+    res.status(404).json({ error: 'Event not found' });
+    return;
+  }
+
+  const result = stmts.cancelEvent.run(req.params.id);
+  if (result.changes === 0) {
+    res.status(400).json({ error: `Cannot cancel event with status "${existing.status}"` });
+    return;
+  }
+
+  console.log(`[events] Cancelled event "${existing.name || req.params.id}"`);
+  res.json({ success: true, event_id: req.params.id });
+});
+
+// ============================
+// Session Message & Subscription API
+// ============================
+
+// Send a message to a session via REST (used by MCP server and agent-to-agent communication)
+app.post('/api/sessions/:id/send', (req, res) => {
+  const { content, sender_session_id, sender_session_name, type } = req.body;
+  if (!content) {
+    res.status(400).json({ error: 'Content is required' });
+    return;
+  }
+
+  const session = stmts.getSession.get(req.params.id) as any;
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  const hasActiveQuery = activeQueries.has(req.params.id);
+
+  if (hasActiveQuery) {
+    // Queue the message for delivery after current query completes
+    const metadata = JSON.stringify({ sender_session_id, sender_session_name, type: type || 'agent_message' });
+    stmts.enqueueMessage.run(req.params.id, type || 'agent_message', content, metadata);
+    console.log(`[send] Queued message for session ${req.params.id} (active query)`);
+    res.json({ status: 'queued', activeQuery: true });
+  } else {
+    // Process immediately
+    processIncomingMessage(req.params.id, content).catch(e =>
+      console.error(`[send] Failed to process message for session ${req.params.id}:`, e)
+    );
+    res.status(202).json({ status: 'processing', activeQuery: false });
+  }
+});
+
+// Get queued messages for a session
+app.get('/api/sessions/:id/queue', (req, res) => {
+  const session = stmts.getSession.get(req.params.id) as any;
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const messages = stmts.getPendingMessages.all(req.params.id) as any[];
+  const count = (stmts.getQueuedMessageCount.get(req.params.id) as any).cnt;
+  res.json({ messages, count });
+});
+
+// Subscribe a session to a webhook path
+app.post('/api/sessions/:id/subscribe', (req, res) => {
+  const { webhook_path } = req.body;
+  if (!webhook_path) {
+    res.status(400).json({ error: 'webhook_path is required' });
+    return;
+  }
+  const session = stmts.getSession.get(req.params.id) as any;
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  stmts.createSubscription.run(req.params.id, webhook_path);
+  console.log(`[subscribe] Session ${req.params.id} subscribed to webhook path "${webhook_path}"`);
+  res.json({ success: true, session_id: req.params.id, webhook_path });
+});
+
+// Unsubscribe a session from a webhook path
+app.delete('/api/sessions/:id/subscribe/:path', (req, res) => {
+  stmts.deleteSubscription.run(req.params.id, req.params.path);
+  console.log(`[unsubscribe] Session ${req.params.id} unsubscribed from webhook path "${req.params.path}"`);
+  res.json({ success: true });
+});
+
+// List webhook subscriptions for a session
+app.get('/api/sessions/:id/subscriptions', (req, res) => {
+  const subs = stmts.getSubscriptionsBySession.all(req.params.id) as any[];
+  res.json(subs);
+});
+
+// ============================
 // Webhook Endpoint
 // ============================
 app.post('/hook/:path', (req, res) => {
-  const task = stmts.getTaskByWebhookPath.get(req.params.path) as any;
-  if (!task) {
+  const webhookPath = req.params.path;
+  const task = stmts.getTaskByWebhookPath.get(webhookPath) as any;
+  const subscriptions = stmts.getSubscriptionsByPath.all(webhookPath) as any[];
+
+  // If no task AND no subscriptions, 404
+  if (!task && subscriptions.length === 0) {
     res.status(404).json({ error: 'Webhook not found' });
     return;
   }
 
-  // Auth check
-  if (task.webhook_secret) {
+  // Auth check (only for task-based webhooks)
+  if (task?.webhook_secret) {
     const authHeader = req.headers.authorization;
     if (!authHeader || authHeader !== `Bearer ${task.webhook_secret}`) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -904,14 +1211,68 @@ app.post('/hook/:path', (req, res) => {
   }
 
   const triggerData = req.body || {};
-  const runId = randomUUID();
 
-  // Fire-and-forget execution
-  executeTask(task, 'webhook', triggerData).catch(e =>
-    console.error('Webhook task execution failed:', e)
-  );
+  // Check for delay/schedule parameters
+  const delaySeconds = triggerData._delay_seconds || req.query.delay_seconds;
+  const scheduledAt = triggerData._scheduled_at || req.query.scheduled_at;
 
-  res.status(202).json({ runId, status: 'started', taskId: task.id });
+  if (delaySeconds || scheduledAt) {
+    // Create a scheduled event instead of executing immediately
+    const eventId = randomUUID();
+    const fireAt = scheduledAt
+      ? new Date(scheduledAt as string).toISOString()
+      : new Date(Date.now() + Number(delaySeconds) * 1000).toISOString();
+
+    // Strip delay params from the payload
+    const { _delay_seconds, _scheduled_at, ...cleanData } = triggerData;
+
+    stmts.createEvent.run(
+      eventId, `Delayed webhook: ${webhookPath}`, 'webhook', fireAt,
+      null, webhookPath, JSON.stringify(cleanData), null, null, null
+    );
+
+    console.log(`[webhook] Scheduled delayed webhook "${webhookPath}" for ${fireAt} (event: ${eventId})`);
+    res.status(202).json({
+      status: 'scheduled',
+      event_id: eventId,
+      scheduled_at: fireAt,
+    });
+    return;
+  }
+
+  // Execute the task if one exists (existing behavior)
+  if (task && task.enabled) {
+    executeTask(task, 'webhook', triggerData).catch(e =>
+      console.error('Webhook task execution failed:', e)
+    );
+  }
+
+  // Deliver to subscribed sessions
+  if (subscriptions.length > 0) {
+    const formattedMessage = `[Webhook Notification]\nYou received a message from webhook "${webhookPath}".\nYou're subscribed to this webhook. Here's the incoming data:\n\n${JSON.stringify(triggerData, null, 2)}`;
+
+    for (const sub of subscriptions) {
+      const hasActiveQuery = activeQueries.has(sub.session_id);
+      if (hasActiveQuery) {
+        // Queue the message
+        const metadata = JSON.stringify({ webhook_path: webhookPath, type: 'webhook' });
+        stmts.enqueueMessage.run(sub.session_id, 'webhook', formattedMessage, metadata);
+        console.log(`[webhook] Queued message for session ${sub.session_id} (${sub.session_name}, active query)`);
+      } else {
+        // Send immediately
+        processIncomingMessage(sub.session_id, formattedMessage).catch(e =>
+          console.error(`[webhook] Failed to deliver to session ${sub.session_id}:`, e)
+        );
+        console.log(`[webhook] Delivering immediately to session ${sub.session_id} (${sub.session_name})`);
+      }
+    }
+  }
+
+  res.status(202).json({
+    status: 'started',
+    taskId: task?.id || null,
+    subscribedSessions: subscriptions.length,
+  });
 });
 
 // ============================
@@ -1158,6 +1519,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       });
     } finally {
       activeQueries.delete(sessionId);
+      processNextQueuedMessage(sessionId);
     }
   } catch (error) {
     console.error('Error in query:', error);
@@ -1463,6 +1825,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       });
     } finally {
       activeQueries.delete(sessionId);
+      processNextQueuedMessage(sessionId);
     }
   } catch (error) {
     console.error(`[task] "${task.name}" execution error:`, error);
@@ -1484,6 +1847,108 @@ function createTaskSession(task: any): string {
   return id;
 }
 
+// ============================
+// Message Queue Processing
+// ============================
+
+async function processIncomingMessage(sessionId: string, content: string): Promise<void> {
+  // Close any existing active query for this session
+  const existingQuery = activeQueries.get(sessionId);
+  if (existingQuery) {
+    console.log(`[processIncomingMessage] Closing existing query for session ${sessionId}`);
+    try { existingQuery.close(); } catch (e) { console.error('[processIncomingMessage] Error closing existing query:', e); }
+    activeQueries.delete(sessionId);
+  }
+
+  // Save user message
+  stmts.insertMessage.run(sessionId, 'user', content, Date.now(), 0, null);
+  stmts.updateLastActive.run(Date.now(), sessionId);
+
+  // Save as SDK event
+  try {
+    stmts.insertSdkEvent.run(
+      sessionId, 'user',
+      JSON.stringify({ type: 'user', message: { role: 'user', content } }),
+      0, Date.now()
+    );
+  } catch (e) {
+    console.error('[processIncomingMessage] Failed to persist user SDK event:', e);
+  }
+
+  // Load MCP config and create query options
+  const mcpServers = loadMcpConfig();
+  const options: SDKOptions = {
+    cwd: process.cwd(),
+    mcpServers,
+    canUseTool: async (toolName: string, input: any) => ({
+      behavior: 'allow' as const,
+      updatedInput: input,
+    }),
+  };
+
+  const session = stmts.getSession.get(sessionId) as any;
+  if (session?.sdkSessionId) {
+    options.resume = session.sdkSessionId;
+  }
+
+  const q = query({ prompt: content, options });
+  activeQueries.set(sessionId, q);
+
+  let turnIndex = 0;
+  try {
+    for await (const event of q) {
+      if (event.type === 'assistant') turnIndex++;
+      broadcastToSession(sessionId, {
+        type: 'sdk_event',
+        sessionId,
+        event,
+        timestamp: Date.now(),
+      }, turnIndex);
+    }
+
+    broadcastToSession(sessionId, { type: 'query_completed', sessionId });
+    broadcastToAll({
+      type: 'session_notification',
+      sessionId,
+      sessionName: (stmts.getSession.get(sessionId) as any)?.name || 'Unknown',
+      notification: 'completed',
+    });
+  } catch (iterError) {
+    console.error('[processIncomingMessage] Iteration error:', iterError);
+    broadcastToSession(sessionId, {
+      type: 'error',
+      sessionId,
+      error: iterError instanceof Error ? iterError.message : String(iterError),
+    });
+  } finally {
+    activeQueries.delete(sessionId);
+    // Drain next queued message
+    processNextQueuedMessage(sessionId);
+  }
+}
+
+function processNextQueuedMessage(sessionId: string) {
+  const pending = stmts.getPendingMessages.all(sessionId) as any[];
+  if (pending.length === 0) return;
+
+  const next = pending[0];
+  stmts.updateMessageStatus.run('processing', next.id);
+  console.log(`[queue] Processing queued message ${next.id} for session ${sessionId} (${pending.length} pending)`);
+
+  // Fire-and-forget the next message
+  processIncomingMessage(sessionId, next.content)
+    .then(() => {
+      stmts.updateMessageStatus.run('delivered', next.id);
+      console.log(`[queue] Delivered queued message ${next.id}`);
+    })
+    .catch((e) => {
+      console.error(`[queue] Failed to process queued message ${next.id}:`, e);
+      stmts.updateMessageStatus.run('failed', next.id);
+      // Try next message even if this one failed
+      processNextQueuedMessage(sessionId);
+    });
+}
+
 // Initialize cron scheduler on startup
 function initCronScheduler() {
   // Mark any runs that were in-progress when server stopped
@@ -1498,6 +1963,96 @@ function initCronScheduler() {
 }
 
 initCronScheduler();
+
+// ============================
+// Scheduled Event Processor
+// ============================
+const EVENT_POLL_INTERVAL_MS = 10_000; // Check every 10 seconds
+
+// Mark events that were running when server stopped as failed
+db.prepare("UPDATE scheduled_events SET status='failed', error='Server restarted during execution' WHERE status='running'").run();
+
+async function processScheduledEvents() {
+  const dueEvents = stmts.getDueEvents.all() as any[];
+
+  for (const event of dueEvents) {
+    // Mark as running (prevents double-processing)
+    const result = stmts.markEventRunning.run(event.id);
+    if (result.changes === 0) continue; // Already picked up
+
+    console.log(`[events] Executing event "${event.name || event.id}" (type: ${event.type})`);
+
+    try {
+      let summary = '';
+
+      switch (event.type) {
+        case 'task': {
+          const task = stmts.getTask.get(event.task_id) as any;
+          if (!task) throw new Error(`Task ${event.task_id} not found`);
+          const triggerData = event.metadata ? JSON.parse(event.metadata) : undefined;
+          await executeTask(task, 'scheduled_event', triggerData);
+          summary = `Ran task "${task.name}"`;
+          break;
+        }
+        case 'webhook': {
+          const webhookPath = event.webhook_path;
+          const webhookData = event.webhook_data ? JSON.parse(event.webhook_data) : {};
+
+          // Execute task if one exists for this path
+          const task = stmts.getTaskByWebhookPath.get(webhookPath) as any;
+          if (task && task.enabled) {
+            await executeTask(task, 'webhook', webhookData);
+          }
+
+          // Deliver to subscribed sessions
+          const subs = stmts.getSubscriptionsByPath.all(webhookPath) as any[];
+          const formattedMessage = `[Scheduled Webhook]\nDelayed webhook for path "${webhookPath}".\nHere's the data:\n\n${JSON.stringify(webhookData, null, 2)}`;
+          for (const sub of subs) {
+            if (activeQueries.has(sub.session_id)) {
+              stmts.enqueueMessage.run(sub.session_id, 'webhook', formattedMessage, JSON.stringify({ webhook_path: webhookPath, type: 'scheduled_webhook' }));
+            } else {
+              processIncomingMessage(sub.session_id, formattedMessage).catch(e =>
+                console.error(`[events] Failed to deliver to session ${sub.session_id}:`, e)
+              );
+            }
+          }
+          summary = `Delivered webhook "${webhookPath}" to ${subs.length} subscriber(s)${task ? ' + task' : ''}`;
+          break;
+        }
+        case 'message': {
+          const session = stmts.getSession.get(event.session_id) as any;
+          if (!session) throw new Error(`Session ${event.session_id} not found`);
+
+          if (activeQueries.has(event.session_id)) {
+            stmts.enqueueMessage.run(event.session_id, 'scheduled_event', event.message_content, JSON.stringify({ event_id: event.id }));
+            summary = 'Message queued (session busy)';
+          } else {
+            await processIncomingMessage(event.session_id, event.message_content);
+            summary = 'Message delivered';
+          }
+          break;
+        }
+        default:
+          throw new Error(`Unknown event type: ${event.type}`);
+      }
+
+      stmts.updateEventStatus.run('completed', null, summary, event.id);
+      console.log(`[events] Event "${event.name || event.id}" completed: ${summary}`);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      stmts.updateEventStatus.run('failed', errMsg, null, event.id);
+      console.error(`[events] Event "${event.name || event.id}" failed:`, errMsg);
+    }
+  }
+}
+
+// Start polling loop
+const eventPollInterval = setInterval(() => {
+  processScheduledEvents().catch(e => console.error('[events] Poll error:', e));
+}, EVENT_POLL_INTERVAL_MS);
+
+// Process any overdue events immediately on startup
+processScheduledEvents().catch(e => console.error('[events] Startup processing error:', e));
 
 // Start server
 const HOST = '0.0.0.0';

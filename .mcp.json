@@ -15,6 +15,10 @@
     "discord": {
       "command": "node",
       "args": ["/root/source/claudes_home/discord-mcp/build/index.js"]
+    },
+    "claude-web": {
+      "command": "node",
+      "args": ["/root/source/claudes_home/claude-web-mcp/build/index.js"]
     }
   }
 }
