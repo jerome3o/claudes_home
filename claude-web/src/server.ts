@@ -1664,7 +1664,10 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(join(__dirname, '../public/dashboard.html'));
 });
 
-// Activity timeline — messages per hour for last 24h, grouped by role
+// Activity timeline — messages per hour for last 24h, grouped by effective role.
+// Messages stored with role='user' are further classified: hub notifications,
+// agent-started triggers, inter-agent messages, and webhook messages are counted
+// as 'bot' activity rather than genuine human 'user' activity.
 app.get('/api/stats/activity', (req, res) => {
   try {
     const hours = 24;
@@ -1673,28 +1676,36 @@ app.get('/api/stats/activity', (req, res) => {
     const rows = db.prepare(`
       SELECT
         CAST((timestamp / 3600000) * 3600000 AS INTEGER) as hour_bucket,
-        role,
+        CASE
+          WHEN role = 'user' AND (
+            content LIKE '[Hub Notification]%'
+            OR content LIKE '[Agent Started%'
+            OR content LIKE '[Message from Agent]%'
+            OR content LIKE '[Webhook Notification]%'
+          ) THEN 'bot'
+          ELSE role
+        END as effective_role,
         COUNT(*) as count
       FROM messages
       WHERE timestamp > ?
-      GROUP BY hour_bucket, role
+      GROUP BY hour_bucket, effective_role
       ORDER BY hour_bucket
-    `).all(since) as Array<{ hour_bucket: number; role: string; count: number }>;
+    `).all(since) as Array<{ hour_bucket: number; effective_role: string; count: number }>;
 
     // Build full 24-hour array of buckets
     const now = Date.now();
     const currentHourStart = Math.floor(now / 3600000) * 3600000;
-    const bucketMap = new Map<number, { user: number; assistant: number; system: number }>();
+    const bucketMap = new Map<number, { user: number; assistant: number; bot: number }>();
 
     for (let i = hours - 1; i >= 0; i--) {
       const hourTs = currentHourStart - (i * 3600000);
-      bucketMap.set(hourTs, { user: 0, assistant: 0, system: 0 });
+      bucketMap.set(hourTs, { user: 0, assistant: 0, bot: 0 });
     }
 
     for (const row of rows) {
       const bucket = bucketMap.get(row.hour_bucket);
       if (bucket) {
-        const role = row.role as 'user' | 'assistant' | 'system';
+        const role = row.effective_role as 'user' | 'assistant' | 'bot';
         if (role in bucket) {
           bucket[role] = row.count;
         }
