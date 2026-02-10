@@ -191,6 +191,7 @@ async function showPost(postId) {
     html += `<button onclick="deletePost('${post.id}', '${post.topic_id}')" class="hub-btn hub-btn-danger hub-btn-sm" style="margin-left:auto">Delete</button>`;
     html += '</div>';
     html += `<div class="hub-post-body hub-markdown">${renderMarkdown(post.content)}</div>`;
+    html += renderReactionBar(post.reactions, post.id);
     html += '</div>';
 
     // Comments section
@@ -247,6 +248,22 @@ function renderAuthor(type, name) {
   return `<span class="hub-author ${cls}">${icon} ${escapeHtml(name || 'Anonymous')}</span>`;
 }
 
+function renderReactionBar(reactions, postId, commentId) {
+  const emojis = ['\u{1F44D}', '\u{1F44E}', '\u{1F389}', '\u{1F914}', '\u{2764}\u{FE0F}', '\u{1F680}'];
+  const reactionMap = {};
+  (reactions || []).forEach(r => { reactionMap[r.emoji] = r; });
+
+  const buttons = emojis.map(emoji => {
+    const data = reactionMap[emoji];
+    const count = data ? data.count : 0;
+    const activeClass = count > 0 ? 'active' : '';
+    const countStr = count > 0 ? ` ${count}` : '';
+    return `<button class="reaction-btn ${activeClass}" data-emoji="${emoji}" data-post-id="${postId}"${commentId ? ` data-comment-id="${commentId}"` : ''}>${emoji}${countStr}</button>`;
+  }).join('');
+
+  return `<div class="reaction-bar">${buttons}</div>`;
+}
+
 function renderCommentTree(comments, postId) {
   if (comments.length === 0) {
     return '<div class="hub-empty" style="padding:1rem"><div class="hub-empty-text">No comments yet</div></div>';
@@ -272,6 +289,7 @@ function renderCommentTree(comments, postId) {
           <button class="hub-reply-btn" onclick="deleteComment('${c.id}', '${postId}')" style="color:var(--error-color)">Delete</button>
         </div>
         <div class="hub-markdown hub-comment-content">${renderMarkdown(c.content)}</div>
+        ${renderReactionBar(c.reactions, c.post_id, c.id)}
         <div id="reply-${c.id}" class="hub-reply-form" style="display:none"></div>
         ${renderChildren(c.id)}
       </div>`;
@@ -601,6 +619,40 @@ function stripMarkdown(text) {
     .replace(/\n/g, ' ')
     .trim();
 }
+
+// ============================
+// Reactions
+// ============================
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.reaction-btn');
+  if (!btn) return;
+
+  const emoji = btn.dataset.emoji;
+  const postId = btn.dataset.postId;
+  const commentId = btn.dataset.commentId || null;
+
+  try {
+    const res = await fetch('/api/hub/reactions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ post_id: postId, comment_id: commentId, emoji }),
+    });
+    const result = await res.json();
+
+    if (result.action === 'added') {
+      btn.classList.add('active');
+      const currentCount = parseInt(btn.textContent.trim().slice(2)) || 0;
+      btn.textContent = `${emoji} ${currentCount + 1}`;
+    } else {
+      const currentCount = parseInt(btn.textContent.trim().slice(2)) || 0;
+      const newCount = Math.max(0, currentCount - 1);
+      btn.textContent = newCount > 0 ? `${emoji} ${newCount}` : emoji;
+      if (newCount === 0) btn.classList.remove('active');
+    }
+  } catch (err) {
+    console.error('Failed to toggle reaction:', err);
+  }
+});
 
 // ============================
 // Initialize

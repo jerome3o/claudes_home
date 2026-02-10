@@ -885,6 +885,40 @@ body {
   margin: 1rem 0;
 }
 
+/* Reaction bar */
+.reaction-bar {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.reaction-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.75rem;
+  background: var(--bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s, border-color 0.15s;
+  line-height: 1;
+}
+
+.reaction-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+}
+
+.reaction-btn.active {
+  background: var(--accent-muted);
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .hub-topic-grid {
