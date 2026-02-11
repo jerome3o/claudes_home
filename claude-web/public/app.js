@@ -169,10 +169,12 @@ async function init() {
   connectWebSocket();
   await loadSessions();
 
-  // Restore session: explicit refresh override > localStorage persist > first session
+  // Restore session: URL param > explicit refresh override > localStorage persist > first session
+  const urlSession = new URLSearchParams(window.location.search).get('session');
+  if (urlSession) history.replaceState(null, '', '/');
   const refreshRestore = sessionStorage.getItem('claude_restore_session');
   sessionStorage.removeItem('claude_restore_session');
-  const lastActiveId = refreshRestore || localStorage.getItem('claude_active_session');
+  const lastActiveId = urlSession || refreshRestore || localStorage.getItem('claude_active_session');
 
   if (lastActiveId && sessions.find(s => s.id === lastActiveId)) {
     selectSession(lastActiveId);

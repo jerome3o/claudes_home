@@ -339,7 +339,7 @@ function renderReactionBar(reactions, postId, commentId) {
 function renderReceipts(receipts) {
   const receiptHtml = receipts.map(r => {
     const dot = r.status === 'seen' ? '\u{1F7E2}' : r.status === 'delivered' ? '\u{1F7E1}' : '\u26AA';
-    return `<span class="hub-receipt" title="${escapeHtml(r.session_name)}: ${r.status}">${dot} ${escapeHtml(r.session_name)}</span>`;
+    return `<a href="/?session=${encodeURIComponent(r.session_id)}" class="hub-receipt" title="${escapeHtml(r.session_name)}: ${r.status}">${dot} ${escapeHtml(r.session_name)}</a>`;
   }).join(' ');
   return `<div class="hub-receipts"><span class="hub-receipts-label">Notified:</span> ${receiptHtml}</div>`;
 }

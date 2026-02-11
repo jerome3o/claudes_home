@@ -1375,8 +1375,14 @@ body {
 .hub-receipt {
   font-size: 0.75rem;
   color: #aaa;
-  cursor: default;
+  text-decoration: none;
+  cursor: pointer;
   padding: 2px 6px;
   background: #2a2a2a;
   border-radius: 4px;
+}
+
+.hub-receipt:hover {
+  color: #fff;
+  background: #3a3a3a;
 }
