@@ -10,6 +10,7 @@ let currentPostId = null;
 let currentTopicData = null;
 let hubWs = null;
 let postModalTopicId = null;
+let showArchived = false;
 
 // ============================
 // API Helper
@@ -133,9 +134,10 @@ async function showTopic(topicId) {
   const main = document.getElementById('hubMain');
 
   try {
+    const postsUrl = showArchived ? `/topics/${topicId}/posts?include_archived=true` : `/topics/${topicId}/posts`;
     const [topic, posts] = await Promise.all([
       hubApi('GET', `/topics/${topicId}`),
-      hubApi('GET', `/topics/${topicId}/posts`),
+      hubApi('GET', postsUrl),
     ]);
     currentTopicData = topic;
 
@@ -165,6 +167,9 @@ async function showTopic(topicId) {
       html += renderPostList(posts, false);
     }
 
+    // Show archived toggle
+    html += `<button class="hub-show-archived-btn" onclick="toggleShowArchived('${topicId}')">${showArchived ? 'Hide archived posts' : 'Show archived posts'}</button>`;
+
     html += '</div>';
     main.innerHTML = html;
 
@@ -192,11 +197,15 @@ async function showPost(postId) {
     // Post detail
     html += '<div class="hub-post-detail">';
     html += `<a href="#/topics/${post.topic_id}" class="hub-back">&larr; Back to topic</a>`;
-    html += `<h2 class="hub-post-title">${escapeHtml(post.title)}</h2>`;
+    const detailStatusBadge = post.status_text
+      ? `<span class="hub-post-status" style="background: ${sanitizeColor(post.status_color) || '#666'}; color: white;">${escapeHtml(post.status_text)}</span>`
+      : '';
+    html += `<h2 class="hub-post-title">${escapeHtml(post.title)}${detailStatusBadge}</h2>`;
     html += '<div class="hub-post-meta">';
     html += renderAuthor(post.author_type, post.author_name);
     html += `<span class="hub-time">${timeAgo(post.created_at)}</span>`;
     html += `<span class="hub-sub-count hub-sub-count-lg" data-type="post" data-id="${post.id}" style="margin-left:auto"></span>`;
+    html += `<button onclick="toggleArchive('${post.id}')" class="hub-btn hub-btn-sm" title="${post.archived ? 'Unarchive' : 'Archive'}">${post.archived ? '📤 Unarchive' : '📥 Archive'}</button>`;
     html += `<button onclick="deletePost('${post.id}', '${post.topic_id}')" class="hub-btn hub-btn-danger hub-btn-sm">Delete</button>`;
     html += '</div>';
     html += `<div class="hub-post-body hub-markdown">${renderMarkdown(post.content)}</div>`;
@@ -239,16 +248,23 @@ async function showPost(postId) {
 function renderPostList(posts, showTopic) {
   let html = '<div class="hub-post-list">';
   for (const p of posts) {
-    html += `<a href="#/posts/${p.id}" class="hub-post-item">
-      <div class="hub-post-item-title">${escapeHtml(p.title)}</div>
-      <div class="hub-post-item-meta">
-        ${renderAuthor(p.author_type, p.author_name)}
-        <span class="hub-time">${timeAgo(p.created_at)}</span>
-        ${showTopic && p.topic_name ? `<span class="hub-post-item-topic">${p.topic_icon || '#'} ${escapeHtml(p.topic_name)}</span>` : ''}
-        <span>💬 ${p.comment_count}</span>
-      </div>
-      <div class="hub-post-item-snippet">${escapeHtml(stripMarkdown(p.content).substring(0, 150))}</div>
-    </a>`;
+    const statusBadge = p.status_text
+      ? `<span class="hub-post-status" style="background: ${sanitizeColor(p.status_color) || '#666'}; color: white;">${escapeHtml(p.status_text)}</span>`
+      : '';
+    const archivedClass = p.archived ? ' archived' : '';
+    html += `<div class="hub-post-item-wrapper${archivedClass}">
+      <a href="#/posts/${p.id}" class="hub-post-item">
+        <div class="hub-post-item-title">${escapeHtml(p.title)}${statusBadge}</div>
+        <div class="hub-post-item-meta">
+          ${renderAuthor(p.author_type, p.author_name)}
+          <span class="hub-time">${timeAgo(p.created_at)}</span>
+          ${showTopic && p.topic_name ? `<span class="hub-post-item-topic">${p.topic_icon || '#'} ${escapeHtml(p.topic_name)}</span>` : ''}
+          <span>💬 ${p.comment_count}</span>
+        </div>
+        <div class="hub-post-item-snippet">${escapeHtml(stripMarkdown(p.content).substring(0, 150))}</div>
+      </a>
+      <button class="hub-archive-btn" onclick="event.stopPropagation(); toggleArchive('${p.id}')" title="${p.archived ? 'Unarchive' : 'Archive'}">${p.archived ? '📤' : '📥'}</button>
+    </div>`;
   }
   html += '</div>';
   return html;
@@ -590,6 +606,33 @@ function connectHubWS() {
   hubWs.onerror = () => {
     hubWs.close();
   };
+}
+
+// ============================
+// Post Status & Archive
+// ============================
+function sanitizeColor(color) {
+  if (!color) return null;
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : null;
+}
+
+async function toggleArchive(postId) {
+  try {
+    await hubApi('PATCH', `/posts/${postId}/archive`);
+    // Re-render current view
+    if (currentView === 'topic' && currentTopicId) {
+      showTopic(currentTopicId);
+    } else if (currentView === 'post') {
+      showPost(postId);
+    }
+  } catch (e) {
+    alert('Failed to toggle archive: ' + e.message);
+  }
+}
+
+function toggleShowArchived(topicId) {
+  showArchived = !showArchived;
+  showTopic(topicId);
 }
 
 // ============================
