@@ -1128,3 +1128,40 @@ body {
     max-width: 900px;
   }
 }
+
+/* @mention badges */
+.hub-mention {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: default;
+}
+
+/* @mention autocomplete dropdown */
+.hub-mention-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 100;
+  margin-bottom: 4px;
+}
+
+.hub-mention-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #ccc;
+}
+
+.hub-mention-option:hover {
+  background: #333;
+  color: #fff;
+}
