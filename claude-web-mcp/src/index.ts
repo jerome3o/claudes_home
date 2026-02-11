@@ -529,6 +529,19 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'hub_set_post_status',
+    description: 'Set the status label and color on a hub post. Use this to mark posts as "In Progress", "Done", "Blocked", etc. Pass null/empty to clear status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID to update status for' },
+        status_text: { type: 'string', description: 'Status label text (e.g., "In Progress", "Done", "Blocked"). Empty to clear.' },
+        status_color: { type: 'string', description: 'Hex color for status badge (e.g., "#22c55e" for green, "#ef4444" for red, "#f59e0b" for amber). Empty to clear.' },
+      },
+      required: ['post_id'],
+    },
+  },
+  {
     name: 'hub_get_post',
     description: 'Get a specific post by ID, including its full content.',
     inputSchema: {
@@ -971,6 +984,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content,
           author_type: 'agent',
           author_id: session_id,
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'hub_set_post_status': {
+        const { post_id, status_text, status_color } = args as any;
+        const result = await apiCall('PATCH', `/api/hub/posts/${post_id}/status`, {
+          status_text: status_text || null,
+          status_color: status_color || null,
         });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],

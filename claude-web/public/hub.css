@@ -334,6 +334,68 @@ body {
   -webkit-box-orient: vertical;
 }
 
+/* Post Status & Archive */
+.hub-post-status {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-left: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.hub-post-item-wrapper {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  position: relative;
+}
+
+.hub-post-item-wrapper .hub-post-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-post-item-wrapper.archived {
+  opacity: 0.5;
+}
+
+.hub-archive-btn {
+  opacity: 0.3;
+  font-size: 0.75rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  color: #999;
+  display: flex;
+  align-items: center;
+}
+
+.hub-archive-btn:hover {
+  opacity: 0.8;
+}
+
+.hub-show-archived-btn {
+  display: block;
+  margin: 16px auto;
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid #444;
+  border-radius: 8px;
+  color: #888;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.hub-show-archived-btn:hover {
+  border-color: #666;
+  color: #ccc;
+}
+
 /* Post Detail */
 .hub-post-detail {
   margin-bottom: 1rem;

@@ -223,7 +223,14 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_hub_posts_topic ON hub_posts(topic_id, created_at DESC);
+`);
 
+// Migrations for post status and archive
+try { db.exec('ALTER TABLE hub_posts ADD COLUMN status_text TEXT DEFAULT NULL'); } catch(e) {}
+try { db.exec('ALTER TABLE hub_posts ADD COLUMN status_color TEXT DEFAULT NULL'); } catch(e) {}
+try { db.exec('ALTER TABLE hub_posts ADD COLUMN archived INTEGER DEFAULT 0'); } catch(e) {}
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS hub_comments (
     id TEXT PRIMARY KEY,
     post_id TEXT NOT NULL REFERENCES hub_posts(id) ON DELETE CASCADE,
@@ -1672,7 +1679,16 @@ app.get('/api/hub/topics/:id/posts', (req, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
-    const posts = stmts.hubGetPostsByTopic.all(req.params.id, limit, offset);
+    const includeArchived = req.query.include_archived === 'true';
+
+    let posts;
+    if (includeArchived) {
+      posts = stmts.hubGetPostsByTopic.all(req.params.id, limit, offset);
+    } else {
+      posts = db.prepare(
+        'SELECT * FROM hub_posts WHERE topic_id = ? AND archived = 0 ORDER BY pinned DESC, created_at DESC LIMIT ? OFFSET ?'
+      ).all(req.params.id, limit, offset);
+    }
     res.json(posts);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1762,6 +1778,38 @@ app.patch('/api/hub/posts/:id', (req, res) => {
       req.params.id
     );
     res.json(stmts.hubGetPost.get(req.params.id));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/hub/posts/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status_text, status_color } = req.body;
+    const post = stmts.hubGetPost.get(id) as any;
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    // Validate status_color if provided — only allow hex colors
+    if (status_color && !/^#[0-9a-fA-F]{6}$/.test(status_color)) {
+      return res.status(400).json({ error: 'Invalid status_color. Must be a hex color like #ff0000' });
+    }
+    db.prepare('UPDATE hub_posts SET status_text = ?, status_color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(status_text || null, status_color || null, id);
+    res.json({ id, status_text: status_text || null, status_color: status_color || null });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/hub/posts/:id/archive', (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = stmts.hubGetPost.get(id) as any;
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const newArchived = post.archived ? 0 : 1;
+    db.prepare('UPDATE hub_posts SET archived = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(newArchived, id);
+    res.json({ id, archived: newArchived });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
