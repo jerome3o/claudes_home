@@ -16,6 +16,10 @@
       <a href="/chat" class="hub-back-link" title="Back to Chat">&larr;</a>
       <h1 class="hub-title">Agent Hub</h1>
       <div class="hub-header-actions">
+        <button class="hub-notif-bell" onclick="toggleNotificationPanel()">
+          🔔
+          <span class="hub-notif-badge" id="notifBadge" style="display:none;">0</span>
+        </button>
         <button id="newTopicBtn" class="hub-btn hub-btn-primary hub-btn-sm">+ Topic</button>
       </div>
     </header>

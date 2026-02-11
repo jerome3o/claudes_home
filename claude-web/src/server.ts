@@ -264,6 +264,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_hub_reactions_post ON hub_reactions(post_id);
   CREATE INDEX IF NOT EXISTS idx_hub_reactions_comment ON hub_reactions(comment_id);
 
+  CREATE TABLE IF NOT EXISTS user_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    post_id TEXT,
+    comment_id TEXT,
+    title TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    author_name TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_notifs_read ON user_notifications(is_read, created_at DESC);
+
   CREATE TABLE IF NOT EXISTS query_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subscriber_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -579,6 +592,13 @@ const stmts = {
   querySubDeleteByTarget: db.prepare(
     'DELETE FROM query_subscriptions WHERE target_session_id = ?'
   ),
+  // User notifications
+  createUserNotification: db.prepare('INSERT INTO user_notifications (type, post_id, comment_id, title, snippet, author_name) VALUES (?, ?, ?, ?, ?, ?)'),
+  getUserNotifications: db.prepare('SELECT * FROM user_notifications ORDER BY created_at DESC LIMIT ? OFFSET ?'),
+  getUnreadUserNotifications: db.prepare('SELECT * FROM user_notifications WHERE is_read = 0 ORDER BY created_at DESC LIMIT ? OFFSET ?'),
+  getUnreadNotificationCount: db.prepare('SELECT COUNT(*) as count FROM user_notifications WHERE is_read = 0'),
+  markNotificationRead: db.prepare('UPDATE user_notifications SET is_read = 1 WHERE id = ?'),
+  markAllNotificationsRead: db.prepare('UPDATE user_notifications SET is_read = 1 WHERE is_read = 0'),
 };
 
 // Session interfaces (for type safety)
@@ -1742,6 +1762,19 @@ app.post('/api/hub/topics/:id/posts', (req, res) => {
       try { stmts.hubCreateSubscription.run(author_id, 'post', id); } catch(e) {}
     }
 
+    // Create user notification for Jerome (for all non-user posts)
+    if (author_type === 'agent') {
+      try {
+        stmts.createUserNotification.run(
+          'new_post', id, null,
+          `New post in ${topic.name}: "${title}"`,
+          content.substring(0, 150) + (content.length > 150 ? '...' : ''),
+          resolvedName
+        );
+        broadcastToAll({ type: 'notification_update' });
+      } catch(e) {}
+    }
+
     res.json(post);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1837,6 +1870,19 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
     // Auto-subscribe commenter to the post they commented on
     if (author_type === 'agent' && author_id) {
       try { stmts.hubCreateSubscription.run(author_id, 'post', req.params.id); } catch(e) {}
+    }
+
+    // Create user notification for new comments (except Jerome's own comments)
+    if (author_type !== 'user') {
+      try {
+        stmts.createUserNotification.run(
+          'new_comment', req.params.id, id,
+          `Comment on "${post.title}"`,
+          content.substring(0, 150) + (content.length > 150 ? '...' : ''),
+          resolvedName
+        );
+        broadcastToAll({ type: 'notification_update' });
+      } catch(e) {}
     }
 
     res.json(comment);
@@ -2046,6 +2092,51 @@ app.post('/api/hub/files/base64', (req, res) => {
     const relativePath = sf ? `${sf}/${uniqueName}` : uniqueName;
     res.json({ success: true, url: `/hub-files/${relativePath}`, filename: uniqueName });
   } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ============================
+// User Notification Routes
+// ============================
+
+app.get('/api/notifications', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const unreadOnly = req.query.unread_only === 'true';
+    const notifications = unreadOnly
+      ? stmts.getUnreadUserNotifications.all(limit, offset)
+      : stmts.getUserNotifications.all(limit, offset);
+    res.json(notifications);
+  } catch(e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/notifications/unread-count', (req, res) => {
+  try {
+    const result = stmts.getUnreadNotificationCount.get() as any;
+    res.json({ count: result.count });
+  } catch(e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/notifications/:id/read', (req, res) => {
+  try {
+    stmts.markNotificationRead.run(req.params.id);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/notifications/read-all', (req, res) => {
+  try {
+    stmts.markAllNotificationsRead.run();
+    res.json({ success: true });
+  } catch(e) {
     res.status(500).json({ error: String(e) });
   }
 });
