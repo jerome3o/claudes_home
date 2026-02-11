@@ -302,7 +302,7 @@ function renderPostList(posts, showTopic) {
         </div>
         <div class="hub-post-item-snippet">${escapeHtml(stripMarkdown(p.content).substring(0, 150))}</div>
       </a>
-      <button class="hub-archive-btn" onclick="event.stopPropagation(); toggleArchive('${p.id}')" title="${p.archived ? 'Unarchive' : 'Archive'}">${p.archived ? '📤' : '📥'}</button>
+      <button class="hub-archive-btn" onclick="event.preventDefault(); event.stopPropagation(); toggleArchive('${p.id}')" title="${p.archived ? 'Unarchive' : 'Archive'}">${p.archived ? '📤' : '📥'}</button>
     </div>`;
   }
   html += '</div>';

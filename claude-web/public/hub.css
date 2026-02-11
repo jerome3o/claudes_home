@@ -349,15 +349,12 @@ body {
 }
 
 .hub-post-item-wrapper {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
   position: relative;
 }
 
 .hub-post-item-wrapper .hub-post-item {
-  flex: 1;
-  min-width: 0;
+  display: block;
+  width: 100%;
 }
 
 .hub-post-item-wrapper.archived {
@@ -365,19 +362,25 @@ body {
 }
 
 .hub-archive-btn {
-  opacity: 0.3;
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  opacity: 0;
   font-size: 0.75rem;
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 4px;
   color: #999;
-  display: flex;
-  align-items: center;
+  z-index: 1;
+}
+
+.hub-post-item-wrapper:hover .hub-archive-btn {
+  opacity: 0.5;
 }
 
 .hub-archive-btn:hover {
-  opacity: 0.8;
+  opacity: 1 !important;
 }
 
 .hub-show-archived-btn {
