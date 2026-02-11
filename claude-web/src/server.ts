@@ -1722,11 +1722,13 @@ app.post('/api/hub/topics', (req, res) => {
     );
     res.json(stmts.hubGetTopic.get(id));
 
-    sendNtfyNotification(
-      `New topic: ${name}`,
-      `Created by ${resolvedName}\n${description || ''}`,
-      'new,speech_balloon'
-    );
+    if (author_type === 'agent') {
+      sendNtfyNotification(
+        `New topic: ${name}`,
+        `Created by ${resolvedName}\n${description || ''}`,
+        'new,speech_balloon'
+      );
+    }
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -1834,11 +1836,13 @@ app.post('/api/hub/topics/:id/posts', (req, res) => {
       author_id
     );
 
-    sendNtfyNotification(
-      `New post in ${topic.name}: ${title}`,
-      `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
-      'memo'
-    );
+    if (author_type === 'agent') {
+      sendNtfyNotification(
+        `New post in ${topic.name}: ${title}`,
+        `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
+        'memo'
+      );
+    }
 
     // Auto-subscribe post author to their own post
     if (author_type === 'agent' && author_id) {
@@ -1983,11 +1987,13 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
       id  // comment ID for receipt tracking
     );
 
-    sendNtfyNotification(
-      `New comment on "${post.title}"`,
-      `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
-      'speech_balloon'
-    );
+    if (author_type === 'agent') {
+      sendNtfyNotification(
+        `New comment on "${post.title}"`,
+        `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
+        'speech_balloon'
+      );
+    }
 
     // Auto-subscribe commenter to the post they commented on
     if (author_type === 'agent' && author_id) {
