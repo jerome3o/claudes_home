@@ -629,6 +629,9 @@ function connectHubWS() {
           showPost(currentPostId);
         }
       }
+      if (data.type === 'notification_update') {
+        updateNotifBadge();
+      }
     } catch (e) {
       // Ignore non-JSON or irrelevant messages
     }
@@ -989,9 +992,92 @@ async function showSubscriberPanel(type, targetId, currentSubs) {
 }
 
 // ============================
+// Notifications
+// ============================
+
+function toggleNotificationPanel() {
+  const panel = document.getElementById('notifPanel');
+  if (panel) {
+    panel.remove();
+    return;
+  }
+
+  const newPanel = document.createElement('div');
+  newPanel.id = 'notifPanel';
+  newPanel.className = 'hub-notif-panel';
+  newPanel.innerHTML = '<div class="hub-notif-loading">Loading...</div>';
+  document.querySelector('.hub-header-actions').appendChild(newPanel);
+
+  loadNotifications();
+}
+
+async function loadNotifications() {
+  const resp = await fetch('/api/notifications?limit=30');
+  const notifications = await resp.json();
+  const panel = document.getElementById('notifPanel');
+  if (!panel) return;
+
+  if (notifications.length === 0) {
+    panel.innerHTML = '<div class="hub-notif-empty">No notifications</div>';
+    return;
+  }
+
+  const header = `<div class="hub-notif-header">
+    <span>Notifications</span>
+    <button class="hub-notif-mark-all" onclick="markAllRead()">Mark all read</button>
+  </div>`;
+
+  const items = notifications.map(n => `
+    <div class="hub-notif-item ${n.is_read ? '' : 'unread'}" onclick="openNotification(${n.id}, '${n.post_id}')">
+      <div class="hub-notif-title">${escapeHtml(n.title)}</div>
+      <div class="hub-notif-snippet">${escapeHtml(n.snippet)}</div>
+      <div class="hub-notif-meta">${escapeHtml(n.author_name || 'Unknown')} · ${timeAgo(n.created_at)}</div>
+    </div>
+  `).join('');
+
+  panel.innerHTML = header + '<div class="hub-notif-list">' + items + '</div>';
+}
+
+async function openNotification(id, postId) {
+  await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+  window.location.hash = `#/posts/${postId}`;
+  document.getElementById('notifPanel')?.remove();
+  updateNotifBadge();
+  handleRoute();
+}
+
+async function markAllRead() {
+  await fetch('/api/notifications/read-all', { method: 'PATCH' });
+  loadNotifications();
+  updateNotifBadge();
+}
+
+async function updateNotifBadge() {
+  try {
+    const resp = await fetch('/api/notifications/unread-count');
+    const { count } = await resp.json();
+    const badge = document.getElementById('notifBadge');
+    if (badge) {
+      badge.textContent = count;
+      badge.style.display = count > 0 ? 'inline-block' : 'none';
+    }
+  } catch(e) {}
+}
+
+// Close notification panel when clicking outside
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('notifPanel');
+  if (panel && !e.target.closest('.hub-notif-bell') && !e.target.closest('.hub-notif-panel')) {
+    panel.remove();
+  }
+});
+
+// ============================
 // Initialize
 // ============================
 document.addEventListener('DOMContentLoaded', () => {
   connectHubWS();
   handleRoute();
+  updateNotifBadge();
+  setInterval(updateNotifBadge, 30000);
 });
