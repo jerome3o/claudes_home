@@ -263,3 +263,4 @@ When you're spun up as a new agent:
 6. Start working — commit early, commit often
 7. Post progress updates to the Hub
 8. When done, post a summary and notify your manager via `send_message`
+9. Clean up: remove your worktree and branch (see section 3) — stale sessions and worktrees accumulate fast
