@@ -2770,9 +2770,15 @@ function openTaskEditor(taskId) {
   const runNowBtn = document.getElementById('teRunNowBtn');
   const viewRunsBtn = document.getElementById('teViewRunsBtn');
 
-  // Populate session dropdown
-  sessionId.innerHTML = '<option value="">Select a session...</option>' +
+  // Populate session dropdowns
+  const sessionOptions = '<option value="">Select a session...</option>' +
     sessions.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  sessionId.innerHTML = sessionOptions;
+  const forkSessionId = document.getElementById('teForkSessionId');
+  if (forkSessionId) {
+    forkSessionId.innerHTML = '<option value="">Select source session...</option>' +
+      sessions.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  }
 
   if (taskId) {
     // Editing existing task
@@ -2787,6 +2793,7 @@ function openTaskEditor(taskId) {
     webhookSecret.value = task.webhook_secret || '';
     prompt.value = task.prompt;
     sessionId.value = task.session_id || '';
+    if (forkSessionId) forkSessionId.value = task.fork_from_session_id || '';
     model.value = task.model || 'sonnet';
     maxTurns.value = task.max_turns || 10;
     maxBudget.value = task.max_budget_usd || 5.0;
@@ -2795,7 +2802,7 @@ function openTaskEditor(taskId) {
     // Set type toggle
     setToggle('cron', 'webhook', task.type === 'webhook');
     // Set mode toggle
-    setToggle('new', 'reuse', task.session_mode === 'reuse');
+    setSessionMode(task.session_mode || 'new');
 
     deleteBtn.style.display = 'block';
     runNowBtn.style.display = 'block';
@@ -2810,13 +2817,14 @@ function openTaskEditor(taskId) {
     webhookSecret.value = '';
     prompt.value = '';
     sessionId.value = '';
+    if (forkSessionId) forkSessionId.value = '';
     model.value = 'opus';
     maxTurns.value = 0;
     maxBudget.value = 0;
     enabled.checked = true;
 
     setToggle('cron', 'webhook', false);
-    setToggle('new', 'reuse', false);
+    setSessionMode('new');
 
     deleteBtn.style.display = 'none';
     runNowBtn.style.display = 'none';
@@ -2831,11 +2839,9 @@ function openTaskEditor(taskId) {
 function setToggle(val1, val2, isSecond) {
   const btn1Map = {
     'cron': document.getElementById('teTypeCron'),
-    'new': document.getElementById('teModeNew'),
   };
   const btn2Map = {
     'webhook': document.getElementById('teTypeWebhook'),
-    'reuse': document.getElementById('teModeReuse'),
   };
 
   const b1 = btn1Map[val1];
@@ -2846,9 +2852,19 @@ function setToggle(val1, val2, isSecond) {
   }
 }
 
+function setSessionMode(mode) {
+  ['teModeNew', 'teModeReuse', 'teModeFork'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.classList.toggle('active', id === 'teMode' + mode.charAt(0).toUpperCase() + mode.slice(1));
+    }
+  });
+}
+
 function updateTaskEditorVisibility() {
   const isCron = document.getElementById('teTypeCron')?.classList.contains('active');
   const isReuse = document.getElementById('teModeReuse')?.classList.contains('active');
+  const isFork = document.getElementById('teModeFork')?.classList.contains('active');
 
   document.querySelectorAll('.te-cron-fields').forEach(el => {
     el.style.display = isCron ? 'flex' : 'none';
@@ -2858,6 +2874,9 @@ function updateTaskEditorVisibility() {
   });
   document.querySelectorAll('.te-reuse-fields').forEach(el => {
     el.style.display = isReuse ? 'flex' : 'none';
+  });
+  document.querySelectorAll('.te-fork-fields').forEach(el => {
+    el.style.display = isFork ? 'flex' : 'none';
   });
 
   // Update webhook URL hint
@@ -2879,11 +2898,15 @@ document.getElementById('teTypeWebhook')?.addEventListener('click', () => {
   updateTaskEditorVisibility();
 });
 document.getElementById('teModeNew')?.addEventListener('click', () => {
-  setToggle('new', 'reuse', false);
+  setSessionMode('new');
   updateTaskEditorVisibility();
 });
 document.getElementById('teModeReuse')?.addEventListener('click', () => {
-  setToggle('new', 'reuse', true);
+  setSessionMode('reuse');
+  updateTaskEditorVisibility();
+});
+document.getElementById('teModeFork')?.addEventListener('click', () => {
+  setSessionMode('fork');
   updateTaskEditorVisibility();
 });
 
@@ -2960,6 +2983,7 @@ document.getElementById('teSaveBtn')?.addEventListener('click', async () => {
 
   const isCron = document.getElementById('teTypeCron')?.classList.contains('active');
   const isReuse = document.getElementById('teModeReuse')?.classList.contains('active');
+  const isFork = document.getElementById('teModeFork')?.classList.contains('active');
 
   const payload = {
     name,
@@ -2967,8 +2991,9 @@ document.getElementById('teSaveBtn')?.addEventListener('click', async () => {
     cron_expression: isCron ? document.getElementById('teCronExpr').value.trim() : null,
     timezone: document.getElementById('teTimezone').value,
     prompt,
-    session_mode: isReuse ? 'reuse' : 'new',
+    session_mode: isFork ? 'fork' : (isReuse ? 'reuse' : 'new'),
     session_id: isReuse ? document.getElementById('teSessionId').value : null,
+    fork_from_session_id: isFork ? document.getElementById('teForkSessionId').value : null,
     webhook_path: !isCron ? document.getElementById('teWebhookPath').value.trim() : null,
     webhook_secret: !isCron ? document.getElementById('teWebhookSecret').value.trim() : null,
     enabled: document.getElementById('teEnabled').checked,

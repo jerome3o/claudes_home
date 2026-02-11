@@ -314,6 +314,9 @@ try {
   // Column already exists — ignore
 }
 
+// Migration: add fork_from_session_id column to scheduled_tasks
+try { db.exec('ALTER TABLE scheduled_tasks ADD COLUMN fork_from_session_id TEXT'); } catch(e) { /* column already exists */ }
+
 // Migrate from JSON if old sessions.json exists and DB is empty
 function migrateFromJson() {
   const sessionCount = (db.prepare('SELECT COUNT(*) as cnt FROM sessions').get() as any).cnt;
@@ -444,12 +447,12 @@ const stmts = {
   getTask: db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?'),
   getTaskByWebhookPath: db.prepare("SELECT * FROM scheduled_tasks WHERE type = 'webhook' AND webhook_path = ? AND enabled = 1"),
   createTask: db.prepare(
-    `INSERT INTO scheduled_tasks (id, name, type, cron_expression, timezone, prompt, session_mode, session_id, webhook_path, webhook_secret, enabled, model, max_turns, max_budget_usd)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO scheduled_tasks (id, name, type, cron_expression, timezone, prompt, session_mode, session_id, webhook_path, webhook_secret, enabled, model, max_turns, max_budget_usd, fork_from_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ),
   updateTask: db.prepare(
     `UPDATE scheduled_tasks SET name=?, type=?, cron_expression=?, timezone=?, prompt=?, session_mode=?, session_id=?,
-     webhook_path=?, webhook_secret=?, enabled=?, model=?, max_turns=?, max_budget_usd=?, updated_at=CURRENT_TIMESTAMP
+     webhook_path=?, webhook_secret=?, enabled=?, model=?, max_turns=?, max_budget_usd=?, fork_from_session_id=?, updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ),
   deleteTask: db.prepare('DELETE FROM scheduled_tasks WHERE id = ?'),
@@ -1308,7 +1311,7 @@ app.get('/api/tasks', (req, res) => {
 app.post('/api/tasks', (req, res) => {
   const { name, type, cron_expression, timezone, prompt, session_mode,
           session_id, webhook_path, webhook_secret, enabled, model,
-          max_turns, max_budget_usd } = req.body;
+          max_turns, max_budget_usd, fork_from_session_id } = req.body;
 
   if (!name || !prompt) {
     res.status(400).json({ error: 'Name and prompt are required' });
@@ -1324,7 +1327,8 @@ app.post('/api/tasks', (req, res) => {
     prompt, session_mode || 'new', session_id || null,
     webhookPath, webhook_secret || null,
     enabled !== undefined ? (enabled ? 1 : 0) : 1,
-    model || 'opus', max_turns ?? 0, max_budget_usd ?? 0
+    model || 'opus', max_turns ?? 0, max_budget_usd ?? 0,
+    fork_from_session_id || null
   );
 
   const task = stmts.getTask.get(id);
@@ -1355,7 +1359,7 @@ app.put('/api/tasks/:id', (req, res) => {
 
   const { name, type, cron_expression, timezone, prompt, session_mode,
           session_id, webhook_path, webhook_secret, enabled, model,
-          max_turns, max_budget_usd } = req.body;
+          max_turns, max_budget_usd, fork_from_session_id } = req.body;
 
   stmts.updateTask.run(
     name ?? existing.name,
@@ -1371,6 +1375,7 @@ app.put('/api/tasks/:id', (req, res) => {
     model ?? existing.model,
     max_turns ?? existing.max_turns,
     max_budget_usd ?? existing.max_budget_usd,
+    fork_from_session_id ?? existing.fork_from_session_id,
     req.params.id
   );
 
@@ -3190,7 +3195,15 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
 
   try {
     // Create or reuse session
-    if (task.session_mode === 'reuse' && task.session_id) {
+    if (task.session_mode === 'fork' && task.fork_from_session_id) {
+      // Fork mode: create new session and copy messages from source
+      task._isFork = true;
+      sessionId = createTaskSession(task);
+      const sourceMessages = stmts.getMessages.all(task.fork_from_session_id) as any[];
+      for (const msg of sourceMessages) {
+        stmts.insertMessage.run(sessionId, msg.role, msg.content, msg.timestamp, msg.useMarkdown || 0, msg.status || null);
+      }
+    } else if (task.session_mode === 'reuse' && task.session_id) {
       // Verify session exists
       const existing = stmts.getSession.get(task.session_id) as any;
       if (existing) {
@@ -3323,7 +3336,8 @@ function createTaskSession(task: any): string {
   const id = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const now = Date.now();
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  const name = `🤖 ${task.name} - ${dateStr}`;
+  const emoji = task._isFork ? '🔀' : '🤖';
+  const name = `${emoji} ${task.name} - ${dateStr}`;
   stmts.createSession.run(id, name, null, now, now, null);
 
   // Auto-subscribe to announcements topic
