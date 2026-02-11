@@ -253,6 +253,12 @@ These areas frequently conflict when multiple agents work in parallel:
 
 **Tip:** When adding new `stmts`, consider grouping them near related existing statements rather than appending at the very end.
 
+### Docker exec `-it` flag breaks MCP servers
+When configuring MCP servers that use `docker exec`, **never use `-it`** — only use `-i`. The `-t` flag requests a pseudo-TTY, but the Claude Agent SDK spawns MCP servers as child processes with piped stdin (not a terminal). Docker detects this and fails with "the input device is not a TTY". This has already bitten the platform once with both `computer-use-mcp` and `chrome-devtools-mcp`.
+
+### Two MCP config files — runtime overrides project config
+`loadMcpConfig()` checks `data/mcp-config.json` first (runtime override, set via the web UI or API). If it exists, the project-level `.mcp.json` is **never consulted**. This means if someone sets MCP config via the API, any servers defined only in `.mcp.json` become invisible. If MCP tools are mysteriously missing, check both files.
+
 ### Service worker cache staleness
 After changing client files, bump the cache version in `public/service-worker.js`:
 ```js
@@ -321,15 +327,17 @@ Use hub_subscribe with:
 ```
 
 ### "MCP tools not available" or "MCP server not responding"
-1. **Check the webtop container** (for `computer-use` and `chrome-devtools` tools):
+1. **Check for `-it` in docker exec args** — if MCP config uses `docker exec -it`, change to `docker exec -i`. The `-t` flag causes "the input device is not a TTY" errors (see pitfalls section 8).
+
+2. **Check the webtop container** (for `computer-use` and `chrome-devtools` tools):
    ```bash
    docker ps | grep webtop
    ```
    If it's not running: `docker-compose up -d webtop` from `/root/source/claudes_home/`
 
-2. **Check MCP config:** The app-level config is at `data/mcp-config.json`. The project-level config is at `.mcp.json` in the repo root. Both are loaded at server startup — if you changed them, restart the server.
+3. **Check MCP config precedence:** `data/mcp-config.json` (runtime) takes priority over `.mcp.json` (project root). If the runtime config exists, `.mcp.json` is ignored entirely — so servers defined only in `.mcp.json` won't load. Check both files.
 
-3. **MCP servers configured at the CLI level** (`~/.claude/settings.json`) are separate from app-level MCP and won't appear in the web UI config.
+4. **MCP servers configured at the CLI level** (`~/.claude/settings.json`) are separate from app-level MCP and won't appear in the web UI config.
 
 ### "npm test fails with vitest not found"
 `NODE_ENV` is probably set to `production`, which causes `npm install` to skip `devDependencies` (where vitest lives). Fix:
