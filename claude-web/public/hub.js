@@ -748,16 +748,17 @@ function setupMentionAutocomplete(textarea) {
             textarea.parentNode.appendChild(autocompleteDiv);
           }
           autocompleteDiv.innerHTML = filtered.map(s =>
-            `<div class="hub-mention-option" data-name="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>`
+            `<div class="hub-mention-option" data-name="${escapeHtml(s.name)}" data-id="${escapeHtml(s.id)}">${escapeHtml(s.name)}</div>`
           ).join('');
           autocompleteDiv.style.display = 'block';
 
           autocompleteDiv.querySelectorAll('.hub-mention-option').forEach(opt => {
             opt.addEventListener('click', () => {
               const name = opt.dataset.name;
+              const id = opt.dataset.id;
               const before = value.substring(0, cursorPos - atMatch[1].length);
               const after = value.substring(cursorPos);
-              e.target.value = before + name + ' ' + after;
+              e.target.value = before + `[${name}](${id}) ` + after;
               autocompleteDiv.style.display = 'none';
               e.target.focus();
             });
@@ -775,10 +776,11 @@ function setupMentionAutocomplete(textarea) {
 }
 
 function renderMentions(html) {
-  // Replace @name patterns with styled badges (runs AFTER markdown/HTML rendering)
-  return html.replace(/@([\w\s/.-]+?)(?=\s|$|[.,;:!?)\]}<])/g, (match, name) => {
+  // Fallback: handle plain @name patterns (no spaces, backwards compat)
+  html = html.replace(/@([\w/.-]+)/g, (match, name) => {
     return `<span class="hub-mention">${escapeHtml(match)}</span>`;
   });
+  return html;
 }
 
 function renderMarkdown(text) {
