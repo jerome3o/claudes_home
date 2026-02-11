@@ -63,6 +63,7 @@
       <div class="header">
         <button id="menuBtn" class="icon-btn">☰</button>
         <h1 id="sessionTitle">Claude</h1>
+        <button id="globalSearchBtn" class="icon-btn" title="Search All Sessions (Ctrl+K)">🔎</button>
         <button id="searchToggleBtn" class="icon-btn" title="Search Messages">🔍</button>
         <div id="connStatus" class="conn-status" title="Connection status">
           <span id="connDot" class="conn-dot"></span>
@@ -348,6 +349,17 @@
     </div>
     <div class="task-editor-body">
       <div id="taskRunsList" class="task-runs-list"></div>
+    </div>
+  </div>
+
+  <!-- Global Search Modal -->
+  <div id="globalSearchOverlay" class="global-search-overlay" style="display:none;">
+    <div class="global-search-modal">
+      <div class="global-search-header">
+        <input type="text" id="globalSearchInput" placeholder="Search all sessions..." autocomplete="off">
+        <span class="global-search-shortcut">Esc to close</span>
+      </div>
+      <div id="globalSearchResults" class="global-search-results"></div>
     </div>
   </div>
 

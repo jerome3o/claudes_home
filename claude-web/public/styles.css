@@ -2616,3 +2616,119 @@ body {
   flex-shrink: 0;
 }
 
+/* ============================
+   Global Search Modal
+   ============================ */
+.global-search-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 2000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.global-search-modal {
+  background: #1e1e2e;
+  border: 1px solid #333;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 60vh;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.global-search-header {
+  padding: 16px;
+  border-bottom: 1px solid #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.global-search-header input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  font-size: 16px;
+  outline: none;
+}
+
+.global-search-shortcut {
+  color: #666;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.global-search-results {
+  overflow-y: auto;
+  max-height: calc(60vh - 60px);
+  padding: 8px;
+}
+
+.global-search-result {
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.global-search-result:hover,
+.global-search-result.selected {
+  background: #2a2a3e;
+}
+
+.global-search-session-name {
+  font-weight: 600;
+  color: #8b8bff;
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+}
+
+.global-search-snippet {
+  color: #ccc;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.global-search-time {
+  color: #666;
+  font-size: 0.7rem;
+  margin-top: 4px;
+}
+
+mark.global-search-highlight {
+  background: rgba(245, 158, 11, 0.3);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.global-search-empty {
+  text-align: center;
+  color: #666;
+  padding: 40px 20px;
+}
+
+@media (max-width: 768px) {
+  .global-search-overlay {
+    padding-top: 5vh;
+  }
+  .global-search-modal {
+    width: 95%;
+    max-height: 80vh;
+  }
+  .global-search-results {
+    max-height: calc(80vh - 60px);
+  }
+}
+

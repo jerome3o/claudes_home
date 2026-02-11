@@ -1142,6 +1142,102 @@ app.get('/api/sessions/:id/events', (req, res) => {
 });
 
 // ============================
+// Global Search API
+// ============================
+app.get('/api/messages/search', (req, res) => {
+  const q = req.query.q as string;
+  if (!q || !q.trim()) {
+    res.json({ results: [], total_count: 0 });
+    return;
+  }
+
+  const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+  const searchTerm = q.trim();
+
+  // Search legacy messages
+  const legacyResults = db.prepare(`
+    SELECT m.session_id, m.role, m.content, m.timestamp, s.name as session_name
+    FROM messages m
+    JOIN sessions s ON m.session_id = s.id
+    WHERE m.content LIKE '%' || ? || '%'
+    ORDER BY m.timestamp DESC
+    LIMIT ?
+  `).all(searchTerm, limit) as any[];
+
+  // Search SDK events (event_data JSON contains message text)
+  const eventResults = db.prepare(`
+    SELECT e.session_id, e.event_data, e.timestamp, s.name as session_name
+    FROM sdk_events e
+    JOIN sessions s ON e.session_id = s.id
+    WHERE e.event_data LIKE '%' || ? || '%'
+    ORDER BY e.timestamp DESC
+    LIMIT ?
+  `).all(searchTerm, limit) as any[];
+
+  // Format legacy results
+  const formattedLegacy = legacyResults.map((r: any) => ({
+    session_id: r.session_id,
+    session_name: r.session_name,
+    content: extractSnippet(r.content, searchTerm),
+    role: r.role,
+    timestamp: r.timestamp,
+  }));
+
+  // Format SDK event results — extract text from event_data JSON
+  const formattedEvents: any[] = [];
+  for (const e of eventResults) {
+    try {
+      const data = JSON.parse(e.event_data);
+      const message = data?.message;
+      if (!message?.content) continue;
+      const textBlocks = Array.isArray(message.content)
+        ? message.content.filter((b: any) => b.type === 'text').map((b: any) => b.text)
+        : [String(message.content)];
+      const fullText = textBlocks.join('\n');
+      if (fullText.toLowerCase().includes(searchTerm.toLowerCase())) {
+        formattedEvents.push({
+          session_id: e.session_id,
+          session_name: e.session_name,
+          content: extractSnippet(fullText, searchTerm),
+          role: message.role || 'assistant',
+          timestamp: e.timestamp,
+        });
+      }
+    } catch {
+      // Skip malformed event data
+    }
+  }
+
+  // Combine, deduplicate by content+session+timestamp, sort by timestamp DESC
+  const seen = new Set<string>();
+  const combined: any[] = [];
+  for (const r of [...formattedLegacy, ...formattedEvents]) {
+    const key = `${r.session_id}:${r.timestamp}:${r.content}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      combined.push(r);
+    }
+  }
+  combined.sort((a, b) => b.timestamp - a.timestamp);
+  const results = combined.slice(0, limit);
+
+  res.json({ results, total_count: results.length });
+});
+
+/** Extract ~100 chars around the first match of `term` in `text`. */
+function extractSnippet(text: string, term: string): string {
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(term.toLowerCase());
+  if (idx === -1) return text.slice(0, 120);
+  const start = Math.max(0, idx - 50);
+  const end = Math.min(text.length, idx + term.length + 50);
+  let snippet = text.slice(start, end);
+  if (start > 0) snippet = '...' + snippet;
+  if (end < text.length) snippet = snippet + '...';
+  return snippet;
+}
+
+// ============================
 // Scheduled Tasks API
 // ============================
 app.get('/api/tasks', (req, res) => {

@@ -3616,3 +3616,172 @@ loadTasks();
 
   console.log('Swipe gesture navigation initialized');
 })();
+
+// ============================
+// Global Search (Ctrl+K / Cmd+K)
+// ============================
+(function() {
+  const overlay = document.getElementById('globalSearchOverlay');
+  const input = document.getElementById('globalSearchInput');
+  const resultsContainer = document.getElementById('globalSearchResults');
+  const globalSearchBtn = document.getElementById('globalSearchBtn');
+
+  let debounceTimer = null;
+  let selectedIndex = -1;
+  let currentResults = [];
+
+  function openGlobalSearch() {
+    overlay.style.display = 'flex';
+    input.value = '';
+    resultsContainer.innerHTML = '<div class="global-search-empty">Type to search across all sessions</div>';
+    selectedIndex = -1;
+    currentResults = [];
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function closeGlobalSearch() {
+    overlay.style.display = 'none';
+    input.value = '';
+    resultsContainer.innerHTML = '';
+    selectedIndex = -1;
+    currentResults = [];
+  }
+
+  function highlightMatch(text, term) {
+    if (!term) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const escapedTerm = escapeHtml(term);
+    const regex = new RegExp('(' + escapedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    return escaped.replace(regex, '<mark class="global-search-highlight">$1</mark>');
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function formatTime(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    return d.toLocaleDateString();
+  }
+
+  function renderResults(results, query) {
+    if (!results.length) {
+      resultsContainer.innerHTML = '<div class="global-search-empty">No results found</div>';
+      return;
+    }
+
+    resultsContainer.innerHTML = results.map((r, i) => `
+      <div class="global-search-result${i === selectedIndex ? ' selected' : ''}" data-index="${i}" data-session-id="${r.session_id}">
+        <div class="global-search-session-name">${escapeHtml(r.session_name)} &middot; ${r.role}</div>
+        <div class="global-search-snippet">${highlightMatch(r.content, query)}</div>
+        <div class="global-search-time">${formatTime(r.timestamp)}</div>
+      </div>
+    `).join('');
+
+    // Click handlers
+    resultsContainer.querySelectorAll('.global-search-result').forEach(el => {
+      el.addEventListener('click', () => {
+        const sessionId = el.dataset.sessionId;
+        closeGlobalSearch();
+        selectSession(sessionId);
+      });
+    });
+  }
+
+  function updateSelection() {
+    const items = resultsContainer.querySelectorAll('.global-search-result');
+    items.forEach((el, i) => {
+      el.classList.toggle('selected', i === selectedIndex);
+    });
+    if (items[selectedIndex]) {
+      items[selectedIndex].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  async function performSearch(query) {
+    if (!query.trim()) {
+      resultsContainer.innerHTML = '<div class="global-search-empty">Type to search across all sessions</div>';
+      currentResults = [];
+      selectedIndex = -1;
+      return;
+    }
+
+    resultsContainer.innerHTML = '<div class="global-search-empty">Searching...</div>';
+
+    try {
+      const resp = await fetch(`/api/messages/search?q=${encodeURIComponent(query)}&limit=50`);
+      const data = await resp.json();
+      currentResults = data.results || [];
+      selectedIndex = currentResults.length > 0 ? 0 : -1;
+      renderResults(currentResults, query);
+    } catch (err) {
+      console.error('Global search error:', err);
+      resultsContainer.innerHTML = '<div class="global-search-empty">Search failed</div>';
+    }
+  }
+
+  // Debounced input handler
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      performSearch(input.value);
+    }, 300);
+  });
+
+  // Keyboard navigation
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (currentResults.length > 0) {
+        selectedIndex = Math.min(selectedIndex + 1, currentResults.length - 1);
+        updateSelection();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (currentResults.length > 0) {
+        selectedIndex = Math.max(selectedIndex - 1, 0);
+        updateSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (selectedIndex >= 0 && currentResults[selectedIndex]) {
+        const sessionId = currentResults[selectedIndex].session_id;
+        closeGlobalSearch();
+        selectSession(sessionId);
+      }
+    } else if (e.key === 'Escape') {
+      closeGlobalSearch();
+    }
+  });
+
+  // Close on overlay click (but not modal click)
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeGlobalSearch();
+  });
+
+  // Global keyboard shortcut: Ctrl+K / Cmd+K
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      if (overlay.style.display === 'none') {
+        openGlobalSearch();
+      } else {
+        closeGlobalSearch();
+      }
+    }
+  });
+
+  // Header button
+  if (globalSearchBtn) {
+    globalSearchBtn.addEventListener('click', openGlobalSearch);
+  }
+
+  console.log('Global search initialized (Ctrl+K / Cmd+K)');
+})();
