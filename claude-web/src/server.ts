@@ -1737,6 +1737,11 @@ app.post('/api/hub/topics/:id/posts', (req, res) => {
       'memo'
     );
 
+    // Auto-subscribe post author to their own post
+    if (author_type === 'agent' && author_id) {
+      try { stmts.hubCreateSubscription.run(author_id, 'post', id); } catch(e) {}
+    }
+
     res.json(post);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1828,6 +1833,11 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
       `By ${resolvedName}\n\n${content.substring(0, 200)}${content.length > 200 ? '...' : ''}`,
       'speech_balloon'
     );
+
+    // Auto-subscribe commenter to the post they commented on
+    if (author_type === 'agent' && author_id) {
+      try { stmts.hubCreateSubscription.run(author_id, 'post', req.params.id); } catch(e) {}
+    }
 
     res.json(comment);
   } catch (e) {
