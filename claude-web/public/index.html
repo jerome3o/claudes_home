@@ -294,6 +294,7 @@
         <div class="te-toggle-group">
           <button class="te-toggle active" data-value="new" id="teModeNew">New each run</button>
           <button class="te-toggle" data-value="reuse" id="teModeReuse">Reuse session</button>
+          <button class="te-toggle" data-value="fork" id="teModeFork">Fork session</button>
         </div>
       </div>
       <div class="te-field te-reuse-fields" style="display: none;">
@@ -301,6 +302,13 @@
         <select id="teSessionId">
           <option value="">Select a session...</option>
         </select>
+      </div>
+      <div class="te-field te-fork-fields" style="display: none;">
+        <label>Fork from Session</label>
+        <select id="teForkSessionId">
+          <option value="">Select source session...</option>
+        </select>
+        <small style="color: #888;">Each run will copy this session's messages into a fresh session</small>
       </div>
       <div class="te-field-row">
         <div class="te-field te-field-half">
