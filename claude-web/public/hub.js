@@ -100,6 +100,7 @@ async function showTopicList() {
             <span class="hub-topic-name">${escapeHtml(t.name)}${t.name === 'announcements' ? ' <span class="hub-auto-sub-badge">(auto-subscribed)</span>' : ''}</span>
             <span class="hub-topic-desc">${escapeHtml(t.description || '')}</span>
           </div>
+          <span class="hub-sub-count" data-type="topic" data-id="${t.id}">...</span>
           <span class="hub-topic-count">${t.post_count} post${t.post_count !== 1 ? 's' : ''}</span>
         </a>`;
       }
@@ -117,6 +118,9 @@ async function showTopicList() {
 
     html += '</div>';
     main.innerHTML = html;
+
+    // Fetch subscriber counts for topic cards
+    loadSubscriberCounts();
   } catch (e) {
     main.innerHTML = `<div class="hub-empty"><div class="hub-empty-text">Error loading topics: ${escapeHtml(e.message)}</div></div>`;
   }
@@ -145,6 +149,7 @@ async function showTopic(topicId) {
       html += `<p class="hub-topic-desc">${escapeHtml(topic.description)}</p>`;
     }
     html += '<div class="hub-topic-actions">';
+    html += `<span class="hub-sub-count hub-sub-count-lg" data-type="topic" data-id="${topicId}">...</span>`;
     html += `<button onclick="openPostModal('${topicId}')" class="hub-btn hub-btn-primary hub-btn-sm">+ New Post</button>`;
     html += `<button onclick="deleteTopic('${topicId}')" class="hub-btn hub-btn-danger hub-btn-sm">Delete Topic</button>`;
     html += '</div>';
@@ -162,6 +167,9 @@ async function showTopic(topicId) {
 
     html += '</div>';
     main.innerHTML = html;
+
+    // Fetch subscriber counts
+    loadSubscriberCounts();
   } catch (e) {
     main.innerHTML = `<div class="hub-empty"><div class="hub-empty-text">Error loading topic: ${escapeHtml(e.message)}</div></div>`;
   }
@@ -188,7 +196,8 @@ async function showPost(postId) {
     html += '<div class="hub-post-meta">';
     html += renderAuthor(post.author_type, post.author_name);
     html += `<span class="hub-time">${timeAgo(post.created_at)}</span>`;
-    html += `<button onclick="deletePost('${post.id}', '${post.topic_id}')" class="hub-btn hub-btn-danger hub-btn-sm" style="margin-left:auto">Delete</button>`;
+    html += `<span class="hub-sub-count hub-sub-count-lg" data-type="post" data-id="${post.id}" style="margin-left:auto"></span>`;
+    html += `<button onclick="deletePost('${post.id}', '${post.topic_id}')" class="hub-btn hub-btn-danger hub-btn-sm">Delete</button>`;
     html += '</div>';
     html += `<div class="hub-post-body hub-markdown">${renderMarkdown(post.content)}</div>`;
     html += renderReactionBar(post.reactions, post.id);
@@ -215,6 +224,9 @@ async function showPost(postId) {
     html += '</div>';
     html += '</div>';
     main.innerHTML = html;
+
+    // Fetch subscriber counts
+    loadSubscriberCounts();
   } catch (e) {
     main.innerHTML = `<div class="hub-empty"><div class="hub-empty-text">Error loading post: ${escapeHtml(e.message)}</div></div>`;
   }
@@ -733,6 +745,112 @@ document.addEventListener('click', async (e) => {
     return;
   }
 });
+
+// ============================
+// Subscription Indicators
+// ============================
+
+function loadSubscriberCounts() {
+  document.querySelectorAll('.hub-sub-count').forEach(async el => {
+    const type = el.dataset.type;
+    const id = el.dataset.id;
+    try {
+      const res = await fetch(`/api/hub/subscriptions/by-target?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+      const subs = await res.json();
+      el.textContent = `${subs.length} subscriber${subs.length !== 1 ? 's' : ''}`;
+      el.title = subs.map(s => s.session_name).join(', ');
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        showSubscriberPanel(type, id, subs);
+      });
+    } catch {
+      el.textContent = '';
+    }
+  });
+}
+
+async function showSubscriberPanel(type, targetId, currentSubs) {
+  const overlay = document.createElement('div');
+  overlay.className = 'hub-sub-panel-overlay';
+
+  const panel = document.createElement('div');
+  panel.className = 'hub-sub-panel';
+
+  // Fetch all sessions for the "add" dropdown
+  let unsubscribed = [];
+  try {
+    const sessionsRes = await fetch('/api/sessions');
+    const allSessions = await sessionsRes.json();
+    const subscribedIds = new Set(currentSubs.map(s => s.session_id));
+    unsubscribed = allSessions.filter(s => !subscribedIds.has(s.id));
+  } catch { /* ignore */ }
+
+  const typeName = type === 'topic' ? 'Topic' : 'Post';
+
+  panel.innerHTML = `
+    <h3>${typeName} Subscribers</h3>
+    <div class="hub-sub-list">
+      ${currentSubs.map(s => `
+        <div class="hub-sub-item" data-session-id="${s.session_id}">
+          <span>${escapeHtml(s.session_name)}</span>
+          <button class="hub-sub-remove-btn" data-session-id="${s.session_id}">Remove</button>
+        </div>
+      `).join('') || '<p class="hub-sub-empty">No subscribers yet</p>'}
+    </div>
+    ${unsubscribed.length > 0 ? `
+      <div class="hub-sub-add">
+        <select class="hub-sub-add-select">
+          <option value="">Add subscriber...</option>
+          ${unsubscribed.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}
+        </select>
+        <button class="hub-sub-add-btn">Add</button>
+      </div>
+    ` : ''}
+    <button class="hub-sub-close-btn">Close</button>
+  `;
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+
+  // Close handlers
+  overlay.querySelector('.hub-sub-close-btn').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  // Remove subscriber handlers
+  panel.querySelectorAll('.hub-sub-remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch('/api/hub/subscriptions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: btn.dataset.sessionId, subscription_type: type, target_id: targetId })
+      });
+      overlay.remove();
+      if (currentView === 'topics') showTopicList();
+      else if (currentView === 'topic') showTopic(currentTopicId);
+      else if (currentView === 'post') showPost(currentPostId);
+    });
+  });
+
+  // Add subscriber handler
+  const addBtn = panel.querySelector('.hub-sub-add-btn');
+  const addSelect = panel.querySelector('.hub-sub-add-select');
+  if (addBtn && addSelect) {
+    addBtn.addEventListener('click', async () => {
+      const sessionId = addSelect.value;
+      if (!sessionId) return;
+      await fetch('/api/hub/subscriptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, subscription_type: type, target_id: targetId })
+      });
+      overlay.remove();
+      if (currentView === 'topics') showTopicList();
+      else if (currentView === 'topic') showTopic(currentTopicId);
+      else if (currentView === 'post') showPost(currentPostId);
+    });
+  }
+}
 
 // ============================
 // Initialize
