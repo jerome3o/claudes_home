@@ -135,6 +135,9 @@ curl -s http://localhost:8080/api/sessions | head -c 100
 - **If you changed client files**, bump the service worker cache version (see pitfalls section 8)
 - **WebSocket clients will auto-reconnect** — the phone PWA handles disconnects with exponential backoff
 
+### Restarting kills your own session
+If you're running inside this platform and you call `systemctl restart claude-web`, you kill the server hosting your own session. You'll get exit code 144 (SIGKILL). The restart still works — but you can't observe the result. After restarting, verify with a **separate** check (e.g., the next agent to start, or `systemctl is-active claude-web`).
+
 ### The cardinal rule
 
 > **If you merged backend changes and didn't restart the server, your changes are NOT live.** This is the #1 source of "my feature is merged but doesn't work" reports.
@@ -258,6 +261,9 @@ When configuring MCP servers that use `docker exec`, **never use `-it`** — onl
 
 ### Two MCP config files — runtime overrides project config
 `loadMcpConfig()` checks `data/mcp-config.json` first (runtime override, set via the web UI or API). If it exists, the project-level `.mcp.json` is **never consulted**. This means if someone sets MCP config via the API, any servers defined only in `.mcp.json` become invisible. If MCP tools are mysteriously missing, check both files.
+
+### Bash quoting traps with JSON/curl
+Characters like `!` in JSON payloads get interpreted by bash history expansion. If you're constructing complex `curl` commands with inline JSON, prefer using heredocs or temp files instead of trying to escape everything inline.
 
 ### Service worker cache staleness
 After changing client files, bump the cache version in `public/service-worker.js`:
