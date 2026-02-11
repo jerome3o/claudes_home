@@ -1188,7 +1188,7 @@ function renderPersistedEvents(events) {
               ? event.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
               : String(event.message.content));
           if (content) {
-            addMessage('user', content, null, false, ts);
+            addMessage('user', content, null, true, ts);
           }
         }
         break;
@@ -1317,10 +1317,10 @@ function sendMessage() {
     const thumbsHtml = pendingImages.map(img =>
       `<img src="data:${img.mediaType};base64,${img.data}" class="message-image-thumb" alt="attached image">`
     ).join('');
-    displayContent = thumbsHtml + (text ? `<p>${escapeHtml(text)}</p>` : '');
+    displayContent = thumbsHtml + (text ? marked.parse(text, { breaks: true }) : '');
     addMessageHtml('user', displayContent);
   } else {
-    addMessage('user', text);
+    addMessage('user', text, null, true);
   }
 
   // Build message payload
