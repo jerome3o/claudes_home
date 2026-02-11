@@ -775,7 +775,25 @@ app.post('/api/sessions', (req, res) => {
 });
 
 app.delete('/api/sessions/:id', (req, res) => {
-  stmts.deleteSession.run(req.params.id);
+  const sessionId = req.params.id;
+
+  // Kill any active query for this session
+  const existingQuery = activeQueries.get(sessionId);
+  if (existingQuery) {
+    try { existingQuery.close(); } catch (e) {}
+    activeQueries.delete(sessionId);
+    broadcastQueryState(sessionId, false);
+  }
+
+  // Clean up all related data (messages table has no FK cascade)
+  db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM sdk_events WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM message_queue WHERE session_id = ?').run(sessionId);
+  db.prepare('DELETE FROM hub_notification_receipts WHERE session_id = ?').run(sessionId);
+
+  // Delete session row (hub_subscriptions cascade via FK)
+  stmts.deleteSession.run(sessionId);
+
   res.json({ success: true });
 });
 
@@ -1622,16 +1640,31 @@ function resolveAuthorName(author_type: string | undefined, author_id: string | 
 
 // Parse @mentions from content and resolve to session IDs
 function parseMentions(content: string): { sessionId: string; name: string }[] {
-  const mentionRegex = /@([\w\s/.-]+?)(?=\s|$|[.,;:!?)\]}])/g;
   const mentions: { sessionId: string; name: string }[] = [];
   const seen = new Set<string>();
+
+  // Format 1: @[Name](session_id) — from autocomplete, supports spaces
+  const bracketRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
   let match;
-  while ((match = mentionRegex.exec(content)) !== null) {
+  while ((match = bracketRegex.exec(content)) !== null) {
+    const sessionId = match[2];
+    if (!seen.has(sessionId)) {
+      const session = db.prepare('SELECT id, name FROM sessions WHERE id = ?').get(sessionId) as any;
+      if (session) {
+        seen.add(sessionId);
+        mentions.push({ sessionId: session.id, name: session.name });
+      }
+    }
+  }
+
+  // Format 2: @name — plain mentions (no spaces, backwards compat)
+  const plainRegex = /@([\w/.-]+)/g;
+  while ((match = plainRegex.exec(content)) !== null) {
     const name = match[1].trim();
     if (name && !seen.has(name.toLowerCase())) {
-      // Look up session by name (case-insensitive)
       const session = db.prepare('SELECT id, name FROM sessions WHERE LOWER(name) = LOWER(?)').get(name) as any;
-      if (session) {
+      if (session && !seen.has(session.id)) {
+        seen.add(session.id);
         seen.add(name.toLowerCase());
         mentions.push({ sessionId: session.id, name: session.name });
       }
@@ -3389,6 +3422,10 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
 
   // Load session for folder and SDK session ID
   const session = stmts.getSession.get(sessionId) as any;
+  if (!session) {
+    console.log(`[processIncomingMessage] Session ${sessionId} not found (deleted?) — skipping`);
+    return;
+  }
   const sessionCwd = resolveSessionCwd(session?.folder);
   const incomingSessionName = session?.name || 'Unknown';
 
