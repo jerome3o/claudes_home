@@ -235,7 +235,7 @@ async function showPost(postId) {
     html += `<button onclick="toggleArchive('${post.id}')" class="hub-btn hub-btn-sm" title="${post.archived ? 'Unarchive' : 'Archive'}">${post.archived ? '📤 Unarchive' : '📥 Archive'}</button>`;
     html += `<button onclick="deletePost('${post.id}', '${post.topic_id}')" class="hub-btn hub-btn-danger hub-btn-sm">Delete</button>`;
     html += '</div>';
-    html += `<div class="hub-post-body hub-markdown">${renderMarkdown(post.content)}</div>`;
+    html += `<div class="hub-post-body hub-markdown">${renderMentions(renderMarkdown(post.content))}</div>`;
     html += renderReactionBar(post.reactions, post.id);
     html += '</div>';
 
@@ -260,6 +260,12 @@ async function showPost(postId) {
     html += '</div>';
     html += '</div>';
     main.innerHTML = html;
+
+    // Set up @mention autocomplete on comment input
+    const commentInput = document.getElementById('commentInput');
+    if (commentInput) {
+      setupMentionAutocomplete(commentInput);
+    }
 
     // Fetch subscriber counts
     loadSubscriberCounts();
@@ -348,7 +354,7 @@ function renderCommentTree(comments, postId) {
           ${canReply ? `<button class="hub-reply-btn" onclick="showReplyForm('${c.id}', '${postId}')">Reply</button>` : ''}
           <button class="hub-reply-btn" onclick="deleteComment('${c.id}', '${postId}')" style="color:var(--error-color)">Delete</button>
         </div>
-        <div class="hub-markdown hub-comment-content">${renderMarkdown(c.content)}</div>
+        <div class="hub-markdown hub-comment-content">${renderMentions(renderMarkdown(c.content))}</div>
         ${renderReactionBar(c.reactions, c.post_id, c.id)}
         <div id="reply-${c.id}" class="hub-reply-form" style="display:none"></div>
         ${renderChildren(c.id)}
@@ -519,7 +525,9 @@ function showReplyForm(commentId, postId) {
       <button onclick="document.getElementById('reply-${commentId}').style.display='none'" class="hub-btn hub-btn-secondary hub-btn-sm">Cancel</button>
     </div>
   `;
-  document.getElementById(`reply-input-${commentId}`).focus();
+  const replyInput = document.getElementById(`reply-input-${commentId}`);
+  setupMentionAutocomplete(replyInput);
+  replyInput.focus();
 }
 
 // Delete actions
@@ -683,6 +691,64 @@ function timeAgo(dateStr) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
   return date.toLocaleDateString();
+}
+
+function setupMentionAutocomplete(textarea) {
+  if (!textarea) return;
+  let autocompleteDiv = null;
+
+  textarea.addEventListener('input', async (e) => {
+    const value = e.target.value;
+    const cursorPos = e.target.selectionStart;
+    const textBeforeCursor = value.substring(0, cursorPos);
+    const atMatch = textBeforeCursor.match(/@([\w\s/.-]*)$/);
+
+    if (atMatch) {
+      const query = atMatch[1].toLowerCase();
+      try {
+        const resp = await fetch('/api/sessions');
+        const sessions = await resp.json();
+        const filtered = sessions.filter(s => s.name.toLowerCase().includes(query)).slice(0, 5);
+
+        if (filtered.length > 0) {
+          if (!autocompleteDiv) {
+            autocompleteDiv = document.createElement('div');
+            autocompleteDiv.className = 'hub-mention-autocomplete';
+            textarea.parentNode.style.position = 'relative';
+            textarea.parentNode.appendChild(autocompleteDiv);
+          }
+          autocompleteDiv.innerHTML = filtered.map(s =>
+            `<div class="hub-mention-option" data-name="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>`
+          ).join('');
+          autocompleteDiv.style.display = 'block';
+
+          autocompleteDiv.querySelectorAll('.hub-mention-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+              const name = opt.dataset.name;
+              const before = value.substring(0, cursorPos - atMatch[1].length);
+              const after = value.substring(cursorPos);
+              e.target.value = before + name + ' ' + after;
+              autocompleteDiv.style.display = 'none';
+              e.target.focus();
+            });
+          });
+        } else if (autocompleteDiv) {
+          autocompleteDiv.style.display = 'none';
+        }
+      } catch (err) {
+        if (autocompleteDiv) autocompleteDiv.style.display = 'none';
+      }
+    } else if (autocompleteDiv) {
+      autocompleteDiv.style.display = 'none';
+    }
+  });
+}
+
+function renderMentions(html) {
+  // Replace @name patterns with styled badges (runs AFTER markdown/HTML rendering)
+  return html.replace(/@([\w\s/.-]+?)(?=\s|$|[.,;:!?)\]}<])/g, (match, name) => {
+    return `<span class="hub-mention">${escapeHtml(match)}</span>`;
+  });
 }
 
 function renderMarkdown(text) {

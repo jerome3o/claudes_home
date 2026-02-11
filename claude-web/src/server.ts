@@ -1576,6 +1576,54 @@ function resolveAuthorName(author_type: string | undefined, author_id: string | 
   return 'Jerome';
 }
 
+// Parse @mentions from content and resolve to session IDs
+function parseMentions(content: string): { sessionId: string; name: string }[] {
+  const mentionRegex = /@([\w\s/.-]+?)(?=\s|$|[.,;:!?)\]}])/g;
+  const mentions: { sessionId: string; name: string }[] = [];
+  const seen = new Set<string>();
+  let match;
+  while ((match = mentionRegex.exec(content)) !== null) {
+    const name = match[1].trim();
+    if (name && !seen.has(name.toLowerCase())) {
+      // Look up session by name (case-insensitive)
+      const session = db.prepare('SELECT id, name FROM sessions WHERE LOWER(name) = LOWER(?)').get(name) as any;
+      if (session) {
+        seen.add(name.toLowerCase());
+        mentions.push({ sessionId: session.id, name: session.name });
+      }
+    }
+  }
+  return mentions;
+}
+
+// Notify agents that were @mentioned in post/comment content
+function notifyMentionedAgents(
+  mentions: { sessionId: string; name: string }[],
+  postId: string,
+  postTitle: string,
+  mentionedBy: string,
+  excludeSessionId?: string
+) {
+  for (const mention of mentions) {
+    if (mention.sessionId === excludeSessionId) continue;
+
+    // Auto-subscribe mentioned agent to the post
+    try { stmts.hubCreateSubscription.run(mention.sessionId, 'post', postId); } catch(e) {}
+
+    // Send direct notification
+    const message = `[Hub Mention] You were mentioned by ${mentionedBy} in "${postTitle}"\n\nView: /hub#/posts/${postId}`;
+    const metadata = JSON.stringify({ type: 'hub_mention', post_id: postId });
+
+    // Check if they have an active query
+    if (activeQueries.has(mention.sessionId)) {
+      db.prepare('INSERT INTO message_queue (session_id, type, content, metadata) VALUES (?, ?, ?, ?)')
+        .run(mention.sessionId, 'hub_mention', message, metadata);
+    } else {
+      processIncomingMessage(mention.sessionId, message);
+    }
+  }
+}
+
 // Hub static files
 const HUB_FILES_DIR = join(DATA_DIR, 'hub-files');
 if (!existsSync(HUB_FILES_DIR)) mkdirSync(HUB_FILES_DIR, { recursive: true });
@@ -1758,6 +1806,12 @@ app.post('/api/hub/topics/:id/posts', (req, res) => {
       try { stmts.hubCreateSubscription.run(author_id, 'post', id); } catch(e) {}
     }
 
+    // Process @mentions
+    const mentions = parseMentions(content);
+    if (mentions.length > 0) {
+      notifyMentionedAgents(mentions, id, title, resolvedName, author_id);
+    }
+
     res.json(post);
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -1885,6 +1939,12 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
     // Auto-subscribe commenter to the post they commented on
     if (author_type === 'agent' && author_id) {
       try { stmts.hubCreateSubscription.run(author_id, 'post', req.params.id); } catch(e) {}
+    }
+
+    // Process @mentions in comment
+    const mentions = parseMentions(content);
+    if (mentions.length > 0) {
+      notifyMentionedAgents(mentions, req.params.id, post.title, resolvedName, author_id);
     }
 
     res.json(comment);
