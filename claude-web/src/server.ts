@@ -258,6 +258,14 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_hub_reactions_post ON hub_reactions(post_id);
   CREATE INDEX IF NOT EXISTS idx_hub_reactions_comment ON hub_reactions(comment_id);
+
+  CREATE TABLE IF NOT EXISTS query_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subscriber_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    target_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(subscriber_session_id, target_session_id)
+  );
 `);
 
 // Add was_querying column for seamless restart support (idempotent)
@@ -552,6 +560,19 @@ const stmts = {
   ),
   hubGetUserReaction: db.prepare(
     'SELECT id FROM hub_reactions WHERE post_id = ? AND emoji = ? AND session_id = ? AND (comment_id IS ? OR comment_id = ?)'
+  ),
+  // Query completion subscriptions
+  querySubGetWatchers: db.prepare(
+    'SELECT qs.*, s.name as subscriber_name FROM query_subscriptions qs JOIN sessions s ON qs.subscriber_session_id = s.id WHERE qs.target_session_id = ?'
+  ),
+  querySubCreate: db.prepare(
+    'INSERT OR IGNORE INTO query_subscriptions (subscriber_session_id, target_session_id) VALUES (?, ?)'
+  ),
+  querySubDelete: db.prepare(
+    'DELETE FROM query_subscriptions WHERE subscriber_session_id = ? AND target_session_id = ?'
+  ),
+  querySubDeleteByTarget: db.prepare(
+    'DELETE FROM query_subscriptions WHERE target_session_id = ?'
   ),
 };
 
@@ -2116,6 +2137,32 @@ app.get('/api/sessions/:id/subscriptions', (req, res) => {
   res.json(subs);
 });
 
+// Watch for query completion
+app.post('/api/sessions/:id/watch', (req, res) => {
+  const { subscriber_session_id } = req.body;
+  if (!subscriber_session_id) {
+    res.status(400).json({ error: 'subscriber_session_id is required' });
+    return;
+  }
+  const target = stmts.getSession.get(req.params.id) as any;
+  if (!target) {
+    res.status(404).json({ error: 'Target session not found' });
+    return;
+  }
+  stmts.querySubCreate.run(subscriber_session_id, req.params.id);
+  res.json({ success: true, watching: req.params.id });
+});
+
+app.delete('/api/sessions/:id/watch', (req, res) => {
+  const { subscriber_session_id } = req.body;
+  if (!subscriber_session_id) {
+    res.status(400).json({ error: 'subscriber_session_id is required' });
+    return;
+  }
+  stmts.querySubDelete.run(subscriber_session_id, req.params.id);
+  res.json({ success: true });
+});
+
 // ============================
 // Webhook Endpoint
 // ============================
@@ -2352,6 +2399,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       try { existingQuery.close(); } catch (e) { console.error('[lifecycle] Error closing existing query:', e); }
       activeQueries.delete(sessionId);
       broadcastQueryState(sessionId, false);
+      notifyQueryWatchers(sessionId);
     }
 
     // Save user message immediately (don't rely on SDK echo)
@@ -2489,6 +2537,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     } finally {
       activeQueries.delete(sessionId);
       broadcastQueryState(sessionId, false);
+      notifyQueryWatchers(sessionId);
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -2500,6 +2549,7 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     });
     activeQueries.delete(sessionId);
     broadcastQueryState(sessionId, false);
+    notifyQueryWatchers(sessionId);
   }
 }
 
@@ -2602,6 +2652,36 @@ function broadcastToAll(data: any) {
 // Broadcast query state changes to all clients (for sidebar activity indicators)
 function broadcastQueryState(sessionId: string, active: boolean) {
   broadcastToAll({ type: 'session_query_state', sessionId, active });
+}
+
+function notifyQueryWatchers(sessionId: string) {
+  try {
+    const watchers = stmts.querySubGetWatchers.all(sessionId) as any[];
+    if (watchers.length === 0) return;
+
+    const session = stmts.getSession.get(sessionId) as any;
+    const sessionName = session?.name || sessionId;
+    const message = `[Query Completed] Session "${sessionName}" has finished its query.`;
+
+    for (const watcher of watchers) {
+      const hasActiveQuery = activeQueries.has(watcher.subscriber_session_id);
+      if (hasActiveQuery) {
+        const metadata = JSON.stringify({ type: 'query_completion', target_session_id: sessionId });
+        stmts.enqueueMessage.run(watcher.subscriber_session_id, 'query_completion', message, metadata);
+        console.log(`[watch] Queued completion notification for ${watcher.subscriber_session_id}`);
+      } else {
+        processIncomingMessage(watcher.subscriber_session_id, message).catch(e =>
+          console.error(`[watch] Failed to deliver completion notification to ${watcher.subscriber_session_id}:`, e)
+        );
+        console.log(`[watch] Delivering completion notification to ${watcher.subscriber_session_id}`);
+      }
+    }
+
+    // One-shot: delete all subscriptions for this target
+    stmts.querySubDeleteByTarget.run(sessionId);
+  } catch (e) {
+    console.error(`[watch] Error notifying query watchers for ${sessionId}:`, e);
+  }
 }
 
 function extractMessageContent(message: any): string {
@@ -2812,6 +2892,7 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
     } finally {
       activeQueries.delete(sessionId);
       broadcastQueryState(sessionId, false);
+      notifyQueryWatchers(sessionId);
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -2853,6 +2934,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     try { existingQuery.close(); } catch (e) { console.error('[processIncomingMessage] Error closing existing query:', e); }
     activeQueries.delete(sessionId);
     broadcastQueryState(sessionId, false);
+    notifyQueryWatchers(sessionId);
   }
 
   // Save user message
@@ -2929,6 +3011,7 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
   } finally {
     activeQueries.delete(sessionId);
     broadcastQueryState(sessionId, false);
+    notifyQueryWatchers(sessionId);
     // Drain next queued message
     processNextQueuedMessage(sessionId);
   }
