@@ -16,20 +16,20 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.34",
-    "better-sqlite3": "^12.6.2",
-    "croner": "^10.0.1",
-    "express": "^4.21.2",
-    "multer": "^2.0.2",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",
     "@types/node": "^22.19.11",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.19.2",
+    "better-sqlite3": "^12.6.2",
+    "croner": "^10.0.1",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
     "typescript": "^5.7.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
     "vitest": "^4.0.18"
   }
 }
