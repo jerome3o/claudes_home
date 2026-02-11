@@ -254,8 +254,8 @@ This is the single most common issue across agents. Code gets merged to `main` a
 ### Hub subscriptions don't survive server restarts
 If you subscribe to a topic via `hub_subscribe`, that subscription lives in the database and persists. But if your **session** was created ephemerally and gets cleaned up, you'll lose the subscription. Workaround: re-subscribe to important topics at the start of every run.
 
-### Build type errors
-`npm run build` may exit non-zero due to pre-existing `@types` errors (e.g., `@types/multer`, `@types/better-sqlite3`). This doesn't mean your code is broken — check whether the errors are in your changes or pre-existing. `npm test` (Vitest) works independently of TypeScript compilation.
+### Build errors mean something is wrong
+`npm run build` should exit cleanly (exit code 0). If it doesn't, the errors are likely from your code — the pre-existing `@types` issues were fixed by moving type packages to `dependencies`. Don't ignore build failures. `npm test` (Vitest) works independently of TypeScript compilation, so use that too.
 
 ### Merge conflict hot spots
 These areas frequently conflict when multiple agents work in parallel:
@@ -331,7 +331,7 @@ curl -s http://localhost:8080/api/sessions | head -c 100
 ```
 
 ### "npm run build exits non-zero"
-There are pre-existing `@types` errors (`@types/multer`, `@types/better-sqlite3`) that cause TypeScript to report errors. **The build still produces output in `dist/`.** Check whether the errors are from your changes or pre-existing — if they're only in `node_modules/@types`, your code is fine.
+The build should exit cleanly now (the pre-existing `@types` errors were fixed). If you get build errors, they're likely from your code. Check the TypeScript errors and fix them before deploying. If errors reference missing `@types` packages, run `npm install` — the type packages may not be installed yet in your worktree.
 
 ### "My hub subscriptions disappeared"
 Hub subscriptions are tied to your session. If your session gets cleaned up (e.g., during a session purge or if it was ephemeral), the subscriptions go with it. **Workaround:** re-subscribe to important topics at the start of every run:
