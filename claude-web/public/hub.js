@@ -202,10 +202,11 @@ async function showPost(postId) {
   const main = document.getElementById('hubMain');
 
   try {
-    const [post, comments, topics] = await Promise.all([
+    const [post, comments, topics, receipts] = await Promise.all([
       hubApi('GET', `/posts/${postId}`),
       hubApi('GET', `/posts/${postId}/comments`),
       hubApi('GET', '/topics'),
+      hubApi('GET', `/posts/${postId}/receipts`).catch(() => []),
     ]);
     currentTopicId = post.topic_id;
 
@@ -237,6 +238,11 @@ async function showPost(postId) {
     html += '</div>';
     html += `<div class="hub-post-body hub-markdown">${renderMentions(renderMarkdown(post.content))}</div>`;
     html += renderReactionBar(post.reactions, post.id);
+    // Post-level receipts (no comment_id)
+    const postReceipts = receipts.filter(r => !r.comment_id);
+    if (postReceipts.length > 0) {
+      html += renderReceipts(postReceipts);
+    }
     html += '</div>';
 
     // Comments section
@@ -254,7 +260,7 @@ async function showPost(postId) {
 
     // Comments list
     html += '<div class="hub-comments-list">';
-    html += renderCommentTree(comments, postId);
+    html += renderCommentTree(comments, postId, receipts);
     html += '</div>';
 
     html += '</div>';
@@ -330,9 +336,28 @@ function renderReactionBar(reactions, postId, commentId) {
   return `<div class="reaction-bar">${pills}${addBtn}</div>`;
 }
 
-function renderCommentTree(comments, postId) {
+function renderReceipts(receipts) {
+  const receiptHtml = receipts.map(r => {
+    const dot = r.status === 'seen' ? '\u{1F7E2}' : r.status === 'delivered' ? '\u{1F7E1}' : '\u26AA';
+    return `<span class="hub-receipt" title="${escapeHtml(r.session_name)}: ${r.status}">${dot} ${escapeHtml(r.session_name)}</span>`;
+  }).join(' ');
+  return `<div class="hub-receipts"><span class="hub-receipts-label">Notified:</span> ${receiptHtml}</div>`;
+}
+
+function renderCommentTree(comments, postId, receipts) {
   if (comments.length === 0) {
     return '<div class="hub-empty" style="padding:1rem"><div class="hub-empty-text">No comments yet</div></div>';
+  }
+
+  // Build receipt lookup by comment_id
+  const receiptsByComment = {};
+  if (receipts) {
+    for (const r of receipts) {
+      if (r.comment_id) {
+        if (!receiptsByComment[r.comment_id]) receiptsByComment[r.comment_id] = [];
+        receiptsByComment[r.comment_id].push(r);
+      }
+    }
   }
 
   // Build tree
@@ -347,6 +372,7 @@ function renderCommentTree(comments, postId) {
     const children = byParent[parentId] || [];
     return children.map(c => {
       const canReply = (c.depth || 0) < 4;
+      const commentReceipts = receiptsByComment[c.id] || [];
       return `<div class="hub-comment" data-depth="${c.depth || 0}">
         <div class="hub-comment-meta">
           ${renderAuthor(c.author_type, c.author_name)}
@@ -356,6 +382,7 @@ function renderCommentTree(comments, postId) {
         </div>
         <div class="hub-markdown hub-comment-content">${renderMentions(renderMarkdown(c.content))}</div>
         ${renderReactionBar(c.reactions, c.post_id, c.id)}
+        ${commentReceipts.length > 0 ? renderReceipts(commentReceipts) : ''}
         <div id="reply-${c.id}" class="hub-reply-form" style="display:none"></div>
         ${renderChildren(c.id)}
       </div>`;

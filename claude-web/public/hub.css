@@ -1350,3 +1350,30 @@ body {
     right: -10px;
   }
 }
+
+/* Notification Receipts */
+.hub-receipts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #333;
+}
+
+.hub-receipts-label {
+  font-size: 0.7rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.hub-receipt {
+  font-size: 0.75rem;
+  color: #aaa;
+  cursor: default;
+  padding: 2px 6px;
+  background: #2a2a2a;
+  border-radius: 4px;
+}

@@ -257,6 +257,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_hub_subs_target ON hub_subscriptions(subscription_type, target_id);
   CREATE INDEX IF NOT EXISTS idx_hub_subs_session ON hub_subscriptions(session_id);
 
+  CREATE TABLE IF NOT EXISTS hub_notification_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id TEXT NOT NULL,
+    comment_id TEXT,
+    session_id TEXT NOT NULL,
+    session_name TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(post_id, comment_id, session_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_receipts_post ON hub_notification_receipts(post_id);
+
   CREATE TABLE IF NOT EXISTS hub_reactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post_id TEXT NOT NULL REFERENCES hub_posts(id) ON DELETE CASCADE,
@@ -586,6 +600,11 @@ const stmts = {
   hubGetUserReaction: db.prepare(
     'SELECT id FROM hub_reactions WHERE post_id = ? AND emoji = ? AND session_id = ? AND (comment_id IS ? OR comment_id = ?)'
   ),
+  // Hub - Notification Receipts
+  createReceipt: db.prepare('INSERT OR IGNORE INTO hub_notification_receipts (post_id, comment_id, session_id, session_name, status) VALUES (?, ?, ?, ?, ?)'),
+  updateReceiptStatus: db.prepare('UPDATE hub_notification_receipts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE post_id = ? AND session_id = ? AND (comment_id = ? OR (comment_id IS NULL AND ? IS NULL))'),
+  getReceiptsByPost: db.prepare('SELECT * FROM hub_notification_receipts WHERE post_id = ? ORDER BY created_at DESC'),
+  getReceiptsByComment: db.prepare('SELECT * FROM hub_notification_receipts WHERE comment_id = ? ORDER BY created_at DESC'),
   // Query completion subscriptions
   querySubGetWatchers: db.prepare(
     'SELECT qs.*, s.name as subscriber_name FROM query_subscriptions qs JOIN sessions s ON qs.subscriber_session_id = s.id WHERE qs.target_session_id = ?'
@@ -1960,7 +1979,8 @@ app.post('/api/hub/posts/:id/comments', (req, res) => {
     notifyHubSubscribers(
       'post', req.params.id,
       `New comment on "${post.title}" by ${resolvedName}:\n\n${content.substring(0, 300)}${content.length > 300 ? '...' : ''}\n\nView thread: /hub#/posts/${req.params.id}`,
-      author_id
+      author_id,
+      id  // comment ID for receipt tracking
     );
 
     sendNtfyNotification(
@@ -2137,6 +2157,25 @@ app.get('/api/hub/comments/:id/reactions', (req, res) => {
     const reactions = stmts.hubGetCommentReactions.all(req.params.id);
     res.json(reactions);
   } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// --- Hub Notification Receipts ---
+app.get('/api/hub/posts/:id/receipts', (req, res) => {
+  try {
+    const receipts = stmts.getReceiptsByPost.all(req.params.id);
+    res.json(receipts);
+  } catch(e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/hub/comments/:id/receipts', (req, res) => {
+  try {
+    const receipts = stmts.getReceiptsByComment.all(req.params.id);
+    res.json(receipts);
+  } catch(e) {
     res.status(500).json({ error: String(e) });
   }
 });
@@ -2891,6 +2930,11 @@ async function handleSendMessage(ws: WebSocket, message: any) {
       activeQueries.delete(sessionId);
       broadcastQueryState(sessionId, false);
       notifyQueryWatchers(sessionId);
+      // Mark notification receipts as seen
+      try {
+        db.prepare("UPDATE hub_notification_receipts SET status = 'seen', updated_at = CURRENT_TIMESTAMP WHERE session_id = ? AND status IN ('queued', 'delivered')")
+          .run(sessionId);
+      } catch(e) {}
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -2903,6 +2947,11 @@ async function handleSendMessage(ws: WebSocket, message: any) {
     activeQueries.delete(sessionId);
     broadcastQueryState(sessionId, false);
     notifyQueryWatchers(sessionId);
+    // Mark notification receipts as seen
+    try {
+      db.prepare("UPDATE hub_notification_receipts SET status = 'seen', updated_at = CURRENT_TIMESTAMP WHERE session_id = ? AND status IN ('queued', 'delivered')")
+        .run(sessionId);
+    } catch(e) {}
   }
 }
 
@@ -3246,6 +3295,11 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       activeQueries.delete(sessionId);
       broadcastQueryState(sessionId, false);
       notifyQueryWatchers(sessionId);
+      // Mark notification receipts as seen
+      try {
+        db.prepare("UPDATE hub_notification_receipts SET status = 'seen', updated_at = CURRENT_TIMESTAMP WHERE session_id = ? AND status IN ('queued', 'delivered')")
+          .run(sessionId);
+      } catch(e) {}
       processNextQueuedMessage(sessionId);
     }
   } catch (error) {
@@ -3280,6 +3334,14 @@ function createTaskSession(task: any): string {
 // ============================
 
 async function processIncomingMessage(sessionId: string, content: string): Promise<void> {
+  // Update notification receipt status to delivered
+  if (content.startsWith('[Hub Notification]')) {
+    try {
+      db.prepare("UPDATE hub_notification_receipts SET status = 'delivered', updated_at = CURRENT_TIMESTAMP WHERE session_id = ? AND status = 'queued'")
+        .run(sessionId);
+    } catch(e) {}
+  }
+
   // Close any existing active query for this session
   const existingQuery = activeQueries.get(sessionId);
   if (existingQuery) {
@@ -3365,6 +3427,11 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
     activeQueries.delete(sessionId);
     broadcastQueryState(sessionId, false);
     notifyQueryWatchers(sessionId);
+    // Mark notification receipts as seen
+    try {
+      db.prepare("UPDATE hub_notification_receipts SET status = 'seen', updated_at = CURRENT_TIMESTAMP WHERE session_id = ? AND status IN ('queued', 'delivered')")
+        .run(sessionId);
+    } catch(e) {}
     // Drain next queued message
     processNextQueuedMessage(sessionId);
   }
@@ -3416,7 +3483,8 @@ function notifyHubSubscribers(
   subscriptionType: 'topic' | 'post',
   targetId: string,
   message: string,
-  excludeSessionId?: string
+  excludeSessionId?: string,
+  commentId?: string
 ) {
   const subs = stmts.hubGetSubscriptionsByTarget.all(subscriptionType, targetId) as any[];
 
@@ -3450,6 +3518,17 @@ function notifyHubSubscribers(
         console.error(`[hub] Failed to deliver notification to session ${sub.session_id}:`, e)
       );
       console.log(`[hub] Delivering notification to session ${sub.session_id}`);
+    }
+
+    // Create delivery receipt
+    const postIdForReceipt = subscriptionType === 'post' ? targetId : null;
+    if (postIdForReceipt) {
+      const session = stmts.getSession.get(sub.session_id) as any;
+      const sessionName = session ? session.name : 'Unknown';
+      const status = hasActiveQuery ? 'queued' : 'delivered';
+      try {
+        stmts.createReceipt.run(postIdForReceipt, commentId || null, sub.session_id, sessionName, status);
+      } catch(e) {}
     }
   }
 
