@@ -90,7 +90,8 @@ The test file is `src/server.test.ts`. Tests spin up a real server on a random p
 
 **Production deploy:**
 ```bash
-npm run build && systemctl restart claude-web
+bash scripts/deploy.sh                        # rebuild + restart
+bash scripts/deploy.sh feature/my-feature     # merge + rebuild + restart
 ```
 
 **Important:** `systemctl restart claude-web` kills active WebSocket connections. The client auto-reconnects with exponential backoff.
@@ -107,25 +108,34 @@ Deploying changes to the live server is the most error-prone step for agents. 4 
 | `public/service-worker.js` | **No** (but bump cache version) | Browser fetches it fresh, but stale cache can serve old app.js/styles.css |
 | `src/server.ts` | **Yes** | Server code runs in the Node process — must restart to pick up changes |
 
-### Deploy steps
+### Deploy script (recommended)
+
+Use `scripts/deploy.sh` — it handles merge, build, restart, and verification in one command:
 
 ```bash
-# 1. Make sure you're on main with the merged code
+# Just rebuild and restart (no merge)
+bash scripts/deploy.sh
+
+# Merge a feature branch, build, and restart
+bash scripts/deploy.sh feature/my-feature
+
+# Preview what would happen (no changes made)
+bash scripts/deploy.sh feature/my-feature --dry-run
+```
+
+The script has safety features: `--dry-run` mode, merge conflict detection with clean abort, build failure stops the restart, and a self-restart warning for agents.
+
+### Manual deploy steps (fallback)
+
+If the deploy script isn't available in your worktree:
+
+```bash
 cd /root/source/claudes_home/claude-web
-git checkout main
-git pull  # or merge your feature branch
-
-# 2. Build TypeScript
+git checkout main && git merge feature/my-feature
 npm run build
-
-# 3. Restart the server
 systemctl restart claude-web
-# OR if systemctl isn't available:
-# Kill the old process, then: node dist/server.js &
-
-# 4. Verify it's running
+# Verify:
 curl -s http://localhost:8080/api/sessions | head -c 100
-# Should return JSON array of sessions
 ```
 
 ### After deploying
