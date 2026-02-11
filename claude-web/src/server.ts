@@ -187,7 +187,12 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_scheduled_events_status_time ON scheduled_events(status, scheduled_at);
+`);
 
+// Migration: add pinned column to sessions
+try { db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0'); } catch(e) { /* column already exists */ }
+
+db.exec(`
   -- Agent Hub tables
   CREATE TABLE IF NOT EXISTS hub_topics (
     id TEXT PRIMARY KEY,
@@ -362,7 +367,7 @@ function autoSubscribeAnnouncementsTopic() {
 // ============================
 const stmts = {
   getAllSessions: db.prepare(
-    'SELECT id, name, folder, created, lastActive, sdkSessionId FROM sessions ORDER BY lastActive DESC'
+    'SELECT id, name, folder, created, lastActive, sdkSessionId, pinned FROM sessions ORDER BY lastActive DESC'
   ),
   getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
   createSession: db.prepare(
@@ -744,6 +749,15 @@ app.patch('/api/sessions/:id', (req, res) => {
     stmts.updateSessionFolder.run(folder || null, req.params.id);
   }
   res.json({ success: true, name, folder });
+});
+
+app.patch('/api/sessions/:id/pin', (req, res) => {
+  const { id } = req.params;
+  const session = stmts.getSession.get(id) as any;
+  if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+  const newPinned = session.pinned ? 0 : 1;
+  db.prepare('UPDATE sessions SET pinned = ? WHERE id = ?').run(newPinned, id);
+  res.json({ id, pinned: newPinned });
 });
 
 app.get('/api/mcp-config', (req, res) => {

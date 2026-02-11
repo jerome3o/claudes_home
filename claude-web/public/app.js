@@ -717,13 +717,14 @@ function renderSessionItem(session) {
     : `<span class="session-time">${timeStr}</span>`;
 
   return `
-    <div class="session-item compact ${session.id === currentSessionId ? 'active' : ''}${unreadClass}"
+    <div class="session-item compact ${session.id === currentSessionId ? 'active' : ''}${unreadClass}${session.pinned ? ' pinned' : ''}"
          data-id="${session.id}">
       <div class="session-info-compact">
         <span class="session-name-compact" title="${escapeHtml(session.name)}">${escapeHtml(displayName)}</span>
         ${statusHtml}
       </div>
       <div class="session-actions">
+        <button class="session-action-btn session-pin-btn ${session.pinned ? 'pinned' : ''}" data-id="${session.id}" title="${session.pinned ? 'Unpin' : 'Pin'}">${session.pinned ? '📌' : '📍'}</button>
         <button class="session-action-btn session-rename-btn" data-id="${session.id}" title="Rename">✏️</button>
         <button class="session-action-btn session-delete-btn" data-id="${session.id}" title="Delete">✕</button>
       </div>
@@ -732,8 +733,9 @@ function renderSessionItem(session) {
 }
 
 function renderSessions() {
-  // Sort: active queries first, then by recency
+  // Sort: pinned first, then active queries, then by recency
   const sortedSessions = [...sessions].sort((a, b) => {
+    if ((a.pinned || 0) !== (b.pinned || 0)) return (b.pinned || 0) - (a.pinned || 0);
     const aActive = sessionQueryStates[a.id] ? 1 : 0;
     const bActive = sessionQueryStates[b.id] ? 1 : 0;
     if (aActive !== bActive) return bActive - aActive;
@@ -807,6 +809,18 @@ function renderSessions() {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       renameSession(btn.dataset.id);
+    });
+  });
+
+  // Pin buttons
+  document.querySelectorAll('.session-pin-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const resp = await fetch(`/api/sessions/${id}/pin`, { method: 'PATCH' });
+      if (resp.ok) {
+        await loadSessions();
+      }
     });
   });
 
