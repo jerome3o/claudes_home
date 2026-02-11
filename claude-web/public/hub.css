@@ -233,20 +233,45 @@ body {
   flex-wrap: wrap;
 }
 
-/* Breadcrumb / Back Navigation */
-.hub-back {
-  display: inline-flex;
+/* Breadcrumb Navigation */
+.hub-breadcrumbs {
+  display: flex;
   align-items: center;
-  gap: 0.2rem;
-  color: var(--accent-color);
-  text-decoration: none;
-  font-size: 0.8rem;
-  margin-bottom: 0.5rem;
-  transition: color 0.15s;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
 }
 
-.hub-back:hover {
-  color: var(--accent-hover);
+.hub-breadcrumb-link {
+  color: #8b8bff;
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.hub-breadcrumb-link:hover {
+  background: rgba(139, 139, 255, 0.1);
+  text-decoration: none;
+}
+
+.hub-breadcrumb-link:active {
+  background: rgba(139, 139, 255, 0.2);
+}
+
+.hub-breadcrumb-sep {
+  color: #555;
+  margin: 0 2px;
+}
+
+.hub-breadcrumb-current {
+  color: #ccc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
 }
 
 /* Post List */
@@ -1053,6 +1078,25 @@ body {
   flex: 1; padding: 4px;
   background: var(--bg-primary, #0f0f0f); color: var(--text-primary, #e0e0e0);
   border: 1px solid var(--border-color, #333); border-radius: 4px;
+}
+
+/* Mobile: larger breadcrumb tap targets */
+@media (max-width: 768px) {
+  .hub-breadcrumbs {
+    padding: 10px 0;
+    font-size: 0.9rem;
+  }
+
+  .hub-breadcrumb-link {
+    padding: 8px 12px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+  }
+
+  .hub-breadcrumb-current {
+    max-width: 150px;
+  }
 }
 
 /* Responsive */

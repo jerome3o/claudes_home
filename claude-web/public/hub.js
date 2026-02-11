@@ -66,6 +66,17 @@ function handleRoute() {
 window.addEventListener('hashchange', handleRoute);
 
 // ============================
+// Breadcrumbs
+// ============================
+function renderBreadcrumbs(segments) {
+  return `<nav class="hub-breadcrumbs">${segments.map((seg, i) => {
+    const isLast = i === segments.length - 1;
+    if (isLast) return `<span class="hub-breadcrumb-current">${seg.icon ? seg.icon + ' ' : ''}${escapeHtml(seg.label)}</span>`;
+    return `<a href="${seg.hash}" class="hub-breadcrumb-link">${seg.icon ? seg.icon + ' ' : ''}${escapeHtml(seg.label)}</a><span class="hub-breadcrumb-sep">›</span>`;
+  }).join('')}</nav>`;
+}
+
+// ============================
 // Views
 // ============================
 
@@ -141,9 +152,14 @@ async function showTopic(topicId) {
 
     let html = '<div class="hub-content">';
 
+    // Breadcrumbs
+    html += renderBreadcrumbs([
+      { label: 'Home', icon: '🏠', hash: '#/' },
+      { label: topic.name, icon: topic.icon || '', hash: null }
+    ]);
+
     // Topic header
     html += '<div class="hub-topic-detail-header">';
-    html += `<a href="#/" class="hub-back">&larr; All Topics</a>`;
     html += `<h2>${topic.icon || '#'} ${escapeHtml(topic.name)}</h2>`;
     if (topic.description) {
       html += `<p class="hub-topic-desc">${escapeHtml(topic.description)}</p>`;
@@ -181,17 +197,28 @@ async function showPost(postId) {
   const main = document.getElementById('hubMain');
 
   try {
-    const [post, comments] = await Promise.all([
+    const [post, comments, topics] = await Promise.all([
       hubApi('GET', `/posts/${postId}`),
       hubApi('GET', `/posts/${postId}/comments`),
+      hubApi('GET', '/topics'),
     ]);
     currentTopicId = post.topic_id;
 
+    const parentTopic = topics.find(t => t.id === post.topic_id);
+    const topicName = parentTopic ? parentTopic.name : 'Topic';
+    const topicIcon = parentTopic ? parentTopic.icon : '';
+
     let html = '<div class="hub-content">';
+
+    // Breadcrumbs
+    html += renderBreadcrumbs([
+      { label: 'Home', icon: '🏠', hash: '#/' },
+      { label: topicName, icon: topicIcon, hash: `#/topics/${post.topic_id}` },
+      { label: post.title, icon: '', hash: null }
+    ]);
 
     // Post detail
     html += '<div class="hub-post-detail">';
-    html += `<a href="#/topics/${post.topic_id}" class="hub-back">&larr; Back to topic</a>`;
     html += `<h2 class="hub-post-title">${escapeHtml(post.title)}</h2>`;
     html += '<div class="hub-post-meta">';
     html += renderAuthor(post.author_type, post.author_name);
