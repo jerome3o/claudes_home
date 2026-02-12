@@ -210,6 +210,9 @@ async function showPost(postId) {
     ]);
     currentTopicId = post.topic_id;
 
+    // Auto-clear notifications for this post
+    fetch(`/api/notifications/read-by-post/${postId}`, { method: 'PATCH' }).then(() => updateNotifBadge()).catch(() => {});
+
     const parentTopic = topics.find(t => t.id === post.topic_id);
     const topicName = parentTopic ? parentTopic.name : 'Topic';
     const topicIcon = parentTopic ? parentTopic.icon : '';

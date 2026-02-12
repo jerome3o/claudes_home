@@ -628,6 +628,7 @@ const stmts = {
   getUnreadNotificationCount: db.prepare('SELECT COUNT(*) as count FROM user_notifications WHERE is_read = 0'),
   markNotificationRead: db.prepare('UPDATE user_notifications SET is_read = 1 WHERE id = ?'),
   markAllNotificationsRead: db.prepare('UPDATE user_notifications SET is_read = 1 WHERE is_read = 0'),
+  markNotificationsReadByPost: db.prepare('UPDATE user_notifications SET is_read = 1 WHERE post_id = ? AND is_read = 0'),
 };
 
 // Session interfaces (for type safety)
@@ -2317,6 +2318,15 @@ app.get('/api/notifications/unread-count', (req, res) => {
 app.patch('/api/notifications/:id/read', (req, res) => {
   try {
     stmts.markNotificationRead.run(req.params.id);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch('/api/notifications/read-by-post/:postId', (req, res) => {
+  try {
+    stmts.markNotificationsReadByPost.run(req.params.postId);
     res.json({ success: true });
   } catch(e) {
     res.status(500).json({ error: String(e) });
