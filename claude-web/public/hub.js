@@ -255,8 +255,11 @@ async function showPost(postId) {
     // Comment form
     html += `<div class="hub-comment-form">
       <textarea id="commentInput" rows="3" placeholder="Write a comment (markdown supported)..."></textarea>
+      <div id="commentFilePreview" class="hub-file-preview"></div>
       <div class="hub-comment-form-actions">
         <input type="text" id="commentAuthor" placeholder="Your name" value="User" />
+        <input type="file" id="commentFiles" accept="image/*" multiple style="display:none" />
+        <button type="button" class="hub-comment-attach-btn" onclick="document.getElementById('commentFiles').click()">📎 Attach</button>
         <button onclick="submitComment('${postId}')" class="hub-btn hub-btn-primary hub-btn-sm">Comment</button>
       </div>
     </div>`;
@@ -275,6 +278,9 @@ async function showPost(postId) {
     if (commentInput) {
       setupMentionAutocomplete(commentInput);
     }
+
+    // Set up file preview for comment form
+    setupFilePreview('commentFiles', 'commentFilePreview');
 
     // Fetch subscriber counts
     loadSubscriberCounts();
@@ -510,20 +516,51 @@ document.getElementById('postFiles').addEventListener('change', (e) => {
   }
 });
 
+function setupFilePreview(fileInputId, previewId) {
+  const fileInput = document.getElementById(fileInputId);
+  if (!fileInput) return;
+  fileInput.addEventListener('change', () => {
+    const preview = document.getElementById(previewId);
+    if (!preview) return;
+    preview.innerHTML = '';
+    for (const file of fileInput.files) {
+      if (file.type.startsWith('image/')) {
+        const thumb = document.createElement('div');
+        thumb.className = 'hub-file-thumb';
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(file);
+        thumb.appendChild(img);
+        preview.appendChild(thumb);
+      }
+    }
+  });
+}
+
 // Comments
 async function submitComment(postId, parentCommentId) {
   const inputId = parentCommentId ? `reply-input-${parentCommentId}` : 'commentInput';
   const authorId = parentCommentId ? `reply-author-${parentCommentId}` : 'commentAuthor';
+  const fileInputId = parentCommentId ? `reply-files-${parentCommentId}` : 'commentFiles';
   const input = document.getElementById(inputId);
   const authorInput = document.getElementById(authorId);
+  const fileInput = document.getElementById(fileInputId);
 
   if (!input) return;
-  const content = input.value.trim();
-  if (!content) return;
+  let content = input.value.trim();
+  if (!content && (!fileInput || !fileInput.files || fileInput.files.length === 0)) return;
 
   const authorName = authorInput ? authorInput.value.trim() || 'User' : 'User';
 
   try {
+    // Upload files first
+    const uploaded = await uploadFiles(fileInput, 'comments');
+    if (uploaded.length > 0) {
+      if (content) content += '\n\n';
+      for (const f of uploaded) {
+        content += `![${f.name}](${f.url})\n`;
+      }
+    }
+
     await hubApi('POST', `/posts/${postId}/comments`, {
       content,
       parent_comment_id: parentCommentId || null,
@@ -549,12 +586,16 @@ function showReplyForm(commentId, postId) {
   container.style.display = 'block';
   container.innerHTML = `
     <textarea id="reply-input-${commentId}" rows="2" placeholder="Write a reply..."></textarea>
+    <div id="reply-preview-${commentId}" class="hub-file-preview"></div>
     <div class="hub-reply-form-actions">
       <input type="text" id="reply-author-${commentId}" placeholder="Your name" value="User" style="flex:1;max-width:150px;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:var(--radius);color:var(--text-primary);padding:0.35rem 0.5rem;font-size:0.8rem" />
+      <input type="file" id="reply-files-${commentId}" accept="image/*" multiple style="display:none" />
+      <button type="button" class="hub-comment-attach-btn" onclick="document.getElementById('reply-files-${commentId}').click()">📎 Attach</button>
       <button onclick="submitComment('${postId}', '${commentId}')" class="hub-btn hub-btn-primary hub-btn-sm">Reply</button>
       <button onclick="document.getElementById('reply-${commentId}').style.display='none'" class="hub-btn hub-btn-secondary hub-btn-sm">Cancel</button>
     </div>
   `;
+  setupFilePreview(`reply-files-${commentId}`, `reply-preview-${commentId}`);
   const replyInput = document.getElementById(`reply-input-${commentId}`);
   setupMentionAutocomplete(replyInput);
   replyInput.focus();

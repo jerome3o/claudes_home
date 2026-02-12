@@ -520,6 +520,21 @@ body {
   border-color: var(--accent-color);
 }
 
+.hub-comment-attach-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.hub-comment-attach-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 /* Comment Thread */
 .hub-comments-list {
   display: flex;
