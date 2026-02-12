@@ -726,19 +726,27 @@ function timeAgo(dateStr) {
 function setupMentionAutocomplete(textarea) {
   if (!textarea) return;
   let autocompleteDiv = null;
+  let sessionsCache = null;
+  let sessionsCacheTime = 0;
 
   textarea.addEventListener('input', async (e) => {
     const value = e.target.value;
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = value.substring(0, cursorPos);
-    const atMatch = textBeforeCursor.match(/@([\w\s/.-]*)$/);
+    // Find the last @ that's at the start of text or after a space/newline
+    const atMatch = textBeforeCursor.match(/(?:^|[\s\n])@([\w\s/.-]{0,40})$/);
 
     if (atMatch) {
-      const query = atMatch[1].toLowerCase();
+      const query = atMatch[1].toLowerCase().trim();
       try {
-        const resp = await fetch('/api/sessions');
-        const sessions = await resp.json();
-        const filtered = sessions.filter(s => s.name.toLowerCase().includes(query)).slice(0, 5);
+        // Cache sessions for 10s to avoid excessive fetching while typing
+        const now = Date.now();
+        if (!sessionsCache || now - sessionsCacheTime > 10000) {
+          const resp = await fetch('/api/sessions');
+          sessionsCache = await resp.json();
+          sessionsCacheTime = now;
+        }
+        const filtered = sessionsCache.filter(s => s.name.toLowerCase().includes(query)).slice(0, 8);
 
         if (filtered.length > 0) {
           if (!autocompleteDiv) {
@@ -756,11 +764,16 @@ function setupMentionAutocomplete(textarea) {
             opt.addEventListener('click', () => {
               const name = opt.dataset.name;
               const id = opt.dataset.id;
-              const before = value.substring(0, cursorPos - atMatch[1].length);
+              // Replace from the @ sign to cursor with @[Name](id)
+              const atPos = textBeforeCursor.lastIndexOf('@');
+              const before = value.substring(0, atPos);
               const after = value.substring(cursorPos);
-              e.target.value = before + `[${name}](${id}) ` + after;
+              e.target.value = before + `@[${name}](${id}) ` + after;
               autocompleteDiv.style.display = 'none';
               e.target.focus();
+              // Move cursor to after the inserted mention
+              const newCursorPos = before.length + `@[${name}](${id}) `.length;
+              e.target.setSelectionRange(newCursorPos, newCursorPos);
             });
           });
         } else if (autocompleteDiv) {
@@ -786,6 +799,11 @@ function renderMentions(html) {
 function renderMarkdown(text) {
   if (!text) return '';
   try {
+    // Pre-process @[Name](session_id) mentions BEFORE markdown parsing
+    // so marked doesn't treat them as links
+    text = text.replace(/@\[([^\]]+)\]\([^)]+\)/g, (match, name) => {
+      return `<span class="hub-mention">@${escapeHtml(name)}</span>`;
+    });
     return marked.parse(text, { breaks: true });
   } catch (e) {
     return escapeHtml(text);
