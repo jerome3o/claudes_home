@@ -252,7 +252,12 @@ async function showPost(postId) {
     html += '<div class="hub-comments-section">';
     html += `<h3>${post.comment_count} Comment${post.comment_count !== 1 ? 's' : ''}</h3>`;
 
-    // Comment form
+    // Comments list
+    html += '<div class="hub-comments-list">';
+    html += renderCommentTree(comments, postId, receipts);
+    html += '</div>';
+
+    // Comment form (below comments so it's near the latest comment)
     html += `<div class="hub-comment-form">
       <textarea id="commentInput" rows="3" placeholder="Write a comment (markdown supported)..."></textarea>
       <div id="commentFilePreview" class="hub-file-preview"></div>
@@ -263,11 +268,6 @@ async function showPost(postId) {
         <button onclick="submitComment('${postId}')" class="hub-btn hub-btn-primary hub-btn-sm">Comment</button>
       </div>
     </div>`;
-
-    // Comments list
-    html += '<div class="hub-comments-list">';
-    html += renderCommentTree(comments, postId, receipts);
-    html += '</div>';
 
     html += '</div>';
     html += '</div>';
