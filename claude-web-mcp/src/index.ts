@@ -627,6 +627,28 @@ const tools: Tool[] = [
       required: ['filename', 'content_base64'],
     },
   },
+
+  // === RECORDING TOOLS ===
+  {
+    name: 'start_recording',
+    description: 'Start recording the webtop screen. Uses ffmpeg to capture the desktop at 15fps. Only one recording can be active at a time. Call stop_recording when done.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string', description: 'Optional custom filename (without extension). Auto-generated if not provided.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'stop_recording',
+    description: 'Stop the current screen recording and get the URL. The recording is saved and can be embedded in hub posts/comments using markdown: ![demo](url)',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 // ============================
@@ -1078,6 +1100,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               note: 'Use the markdown_image string to embed this image in a post or comment.',
             }, null, 2),
           }],
+        };
+      }
+
+      // === RECORDING TOOLS ===
+
+      case 'start_recording': {
+        const { filename } = args as any;
+        const result = await apiCall('POST', '/api/recording/start', { filename });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'stop_recording': {
+        const result = await apiCall('POST', '/api/recording/stop', {});
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            ...result,
+            markdown_video: result.url ? `![demo](${result.url})` : undefined,
+            note: result.url ? 'Use the markdown_video string to embed this video in a post or comment.' : undefined,
+          }, null, 2) }],
         };
       }
 

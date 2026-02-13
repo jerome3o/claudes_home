@@ -1707,6 +1707,103 @@ const HUB_FILES_DIR = join(DATA_DIR, 'hub-files');
 if (!existsSync(HUB_FILES_DIR)) mkdirSync(HUB_FILES_DIR, { recursive: true });
 app.use('/hub-files', express.static(HUB_FILES_DIR));
 
+// Recordings directory
+const RECORDINGS_DIR = join(DATA_DIR, 'recordings');
+if (!existsSync(RECORDINGS_DIR)) mkdirSync(RECORDINGS_DIR, { recursive: true });
+app.use('/recordings', express.static(RECORDINGS_DIR));
+
+// Recording state
+let currentRecording: { filename: string; startTime: number } | null = null;
+
+// POST /api/recording/start — Start ffmpeg screen recording in webtop
+app.post('/api/recording/start', (req, res) => {
+  try {
+    if (currentRecording) {
+      res.status(409).json({
+        error: 'A recording is already in progress',
+        filename: currentRecording.filename,
+        duration: Math.round((Date.now() - currentRecording.startTime) / 1000),
+      });
+      return;
+    }
+
+    const customName = req.body?.filename;
+    const filename = customName
+      ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`
+      : `recording_${Date.now()}.mp4`;
+
+    // Start ffmpeg in detached mode inside the webtop container
+    execSync(
+      `docker exec -d webtop ffmpeg -f x11grab -framerate 15 -video_size 1280x720 -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p /tmp/${filename}`,
+      { timeout: 30000 }
+    );
+
+    currentRecording = { filename, startTime: Date.now() };
+
+    res.json({ recording: true, filename, message: 'Recording started' });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// POST /api/recording/stop — Stop recording and copy file out
+app.post('/api/recording/stop', async (req, res) => {
+  try {
+    if (!currentRecording) {
+      res.status(400).json({ error: 'No recording in progress' });
+      return;
+    }
+
+    const { filename } = currentRecording;
+
+    // Send SIGINT to ffmpeg for clean MP4 finalization
+    try {
+      execSync('docker exec webtop pkill -INT ffmpeg', { timeout: 30000 });
+    } catch (e) {
+      // pkill returns non-zero if no process found — that's OK
+    }
+
+    // Wait for ffmpeg to finalize the file
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Copy file from container
+    execSync(`docker cp webtop:/tmp/${filename} ${RECORDINGS_DIR}/${filename}`, { timeout: 30000 });
+
+    // Clean up in container
+    try {
+      execSync(`docker exec webtop rm /tmp/${filename}`, { timeout: 30000 });
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+
+    const url = `/recordings/${filename}`;
+    currentRecording = null;
+
+    res.json({
+      recording: false,
+      filename,
+      url,
+      message: `Recording saved. Use ![demo](${url}) to embed in a post.`,
+    });
+  } catch (e) {
+    currentRecording = null;
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// GET /api/recording/status — Check recording state
+app.get('/api/recording/status', (req, res) => {
+  if (currentRecording) {
+    res.json({
+      recording: true,
+      filename: currentRecording.filename,
+      duration: Math.round((Date.now() - currentRecording.startTime) / 1000),
+    });
+  } else {
+    res.json({ recording: false });
+  }
+});
+
 // Redirect /hub to / for backward compatibility
 app.get('/hub', (req, res) => {
   res.redirect('/');
