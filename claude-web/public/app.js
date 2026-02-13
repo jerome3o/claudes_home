@@ -1,27 +1,4 @@
 // ============================
-// Webtop Detection — block app from loading inside the VNC desktop
-// ============================
-// The webtop runs Linux x86_64 Chrome. Your phone runs Android.
-// If we detect a desktop Linux UA without Android, show a blocker.
-(function() {
-  const ua = navigator.userAgent;
-  const isLinuxDesktop = ua.includes('Linux') && ua.includes('X11') && !ua.includes('Android');
-  // Also check if running inside the webtop by looking at screen size typical of VNC
-  // and the absence of touch support combined with Linux desktop
-  if (isLinuxDesktop) {
-    document.documentElement.innerHTML = `
-      <body style="background:#0f0f0f;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:2rem;">
-        <div>
-          <div style="font-size:3rem;margin-bottom:1rem;">🚫</div>
-          <h2 style="margin:0 0 0.5rem">This app is for mobile devices</h2>
-          <p style="color:#888;font-size:0.9rem;">Please use your phone to access Claude.<br>This browser appears to be inside the webtop container.</p>
-        </div>
-      </body>`;
-    throw new Error('Blocked: running inside webtop');
-  }
-})();
-
-// ============================
 // Remote Console Log Piping
 // ============================
 // Must be defined early so all subsequent console calls are captured

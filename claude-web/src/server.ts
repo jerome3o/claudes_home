@@ -740,7 +740,7 @@ app.get('/chat', (req, res) => {
 
 // Serve static files
 app.use(express.static(join(__dirname, '../public')));
-app.use(express.json());
+app.use(express.json({ limit: '250mb' }));
 
 // ============================
 // API endpoints
@@ -859,7 +859,7 @@ app.post('/api/webtop/restart', (req, res) => {
 const FILE_ROOT = process.env.FILE_ROOT || '/root/source/claudes_home';
 
 // Multer for file uploads
-const upload = multer({ dest: '/tmp/claude-web-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({ dest: '/tmp/claude-web-uploads/', limits: { fileSize: 200 * 1024 * 1024 } });
 
 function safePath(requestedPath: string): string {
   // Resolve to absolute, ensure within FILE_ROOT
@@ -2226,7 +2226,7 @@ app.get('/api/hub/comments/:id/receipts', (req, res) => {
 });
 
 // --- Hub File Upload (multipart for web UI) ---
-const hubUpload = multer({ dest: '/tmp/claude-hub-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+const hubUpload = multer({ dest: '/tmp/claude-hub-uploads/', limits: { fileSize: 200 * 1024 * 1024 } });
 app.post('/api/hub/files', hubUpload.array('files', 10), (req, res) => {
   try {
     const subfolder = ((req.body.subfolder as string) || '').replace(/\.\./g, '');

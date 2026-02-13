@@ -258,7 +258,7 @@ async function showPost(postId) {
       <div id="commentFilePreview" class="hub-file-preview"></div>
       <div class="hub-comment-form-actions">
         <input type="text" id="commentAuthor" placeholder="Your name" value="User" />
-        <input type="file" id="commentFiles" accept="image/*" multiple style="display:none" />
+        <input type="file" id="commentFiles" accept="image/*,video/*" multiple style="display:none" />
         <button type="button" class="hub-comment-attach-btn" onclick="document.getElementById('commentFiles').click()">📎 Attach</button>
         <button onclick="submitComment('${postId}')" class="hub-btn hub-btn-primary hub-btn-sm">Comment</button>
       </div>
@@ -505,7 +505,19 @@ document.getElementById('postFiles').addEventListener('change', (e) => {
   const preview = document.getElementById('postFilePreview');
   preview.innerHTML = '';
   for (const file of e.target.files) {
-    if (file.type.startsWith('image/')) {
+    if (file.type.startsWith('video/')) {
+      const thumb = document.createElement('div');
+      thumb.className = 'hub-file-thumb';
+      const icon = document.createElement('div');
+      icon.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:1.5rem;';
+      icon.textContent = '🎬';
+      thumb.appendChild(icon);
+      const label = document.createElement('div');
+      label.style.cssText = 'position:absolute;bottom:2px;left:0;right:0;font-size:0.5rem;text-align:center;color:#ccc;overflow:hidden;text-overflow:ellipsis;';
+      label.textContent = file.name;
+      thumb.appendChild(label);
+      preview.appendChild(thumb);
+    } else if (file.type.startsWith('image/')) {
       const thumb = document.createElement('div');
       thumb.className = 'hub-file-thumb';
       const img = document.createElement('img');
@@ -524,7 +536,19 @@ function setupFilePreview(fileInputId, previewId) {
     if (!preview) return;
     preview.innerHTML = '';
     for (const file of fileInput.files) {
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith('video/')) {
+        const thumb = document.createElement('div');
+        thumb.className = 'hub-file-thumb';
+        const icon = document.createElement('div');
+        icon.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:1.5rem;';
+        icon.textContent = '🎬';
+        thumb.appendChild(icon);
+        const label = document.createElement('div');
+        label.style.cssText = 'position:absolute;bottom:2px;left:0;right:0;font-size:0.5rem;text-align:center;color:#ccc;overflow:hidden;text-overflow:ellipsis;';
+        label.textContent = file.name;
+        thumb.appendChild(label);
+        preview.appendChild(thumb);
+      } else if (file.type.startsWith('image/')) {
         const thumb = document.createElement('div');
         thumb.className = 'hub-file-thumb';
         const img = document.createElement('img');
@@ -589,7 +613,7 @@ function showReplyForm(commentId, postId) {
     <div id="reply-preview-${commentId}" class="hub-file-preview"></div>
     <div class="hub-reply-form-actions">
       <input type="text" id="reply-author-${commentId}" placeholder="Your name" value="User" style="flex:1;max-width:150px;background:var(--bg-primary);border:1px solid var(--border-color);border-radius:var(--radius);color:var(--text-primary);padding:0.35rem 0.5rem;font-size:0.8rem" />
-      <input type="file" id="reply-files-${commentId}" accept="image/*" multiple style="display:none" />
+      <input type="file" id="reply-files-${commentId}" accept="image/*,video/*" multiple style="display:none" />
       <button type="button" class="hub-comment-attach-btn" onclick="document.getElementById('reply-files-${commentId}').click()">📎 Attach</button>
       <button onclick="submitComment('${postId}', '${commentId}')" class="hub-btn hub-btn-primary hub-btn-sm">Reply</button>
       <button onclick="document.getElementById('reply-${commentId}').style.display='none'" class="hub-btn hub-btn-secondary hub-btn-sm">Cancel</button>
@@ -848,7 +872,12 @@ function renderMarkdown(text) {
     text = text.replace(/@\[([^\]]+)\]\([^)]+\)/g, (match, name) => {
       return `<span class="hub-mention">@${escapeHtml(name)}</span>`;
     });
-    return marked.parse(text, { breaks: true });
+    let html = marked.parse(text, { breaks: true });
+    // Convert img tags with video extensions to video players
+    html = html.replace(/<img\s+src="([^"]+\.(mp4|webm|mov|mkv|ogg))"[^>]*>/gi, (match, src) => {
+      return `<video controls preload="metadata" class="hub-video"><source src="${src}"></video>`;
+    });
+    return html;
   } catch (e) {
     return escapeHtml(text);
   }
