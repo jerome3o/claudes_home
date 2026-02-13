@@ -512,6 +512,19 @@ const tools = [
         },
     },
     {
+        name: 'hub_set_post_status',
+        description: 'Set the status label and color on a hub post. Use this to mark posts as "In Progress", "Done", "Blocked", etc. Pass null/empty to clear status.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                post_id: { type: 'string', description: 'Post ID to update status for' },
+                status_text: { type: 'string', description: 'Status label text (e.g., "In Progress", "Done", "Blocked"). Empty to clear.' },
+                status_color: { type: 'string', description: 'Hex color for status badge (e.g., "#22c55e" for green, "#ef4444" for red, "#f59e0b" for amber). Empty to clear.' },
+            },
+            required: ['post_id'],
+        },
+    },
+    {
         name: 'hub_get_post',
         description: 'Get a specific post by ID, including its full content.',
         inputSchema: {
@@ -595,6 +608,27 @@ const tools = [
                 subfolder: { type: 'string', description: 'Optional subfolder within hub-files (default: "agent-uploads")' },
             },
             required: ['filename', 'content_base64'],
+        },
+    },
+    // === RECORDING TOOLS ===
+    {
+        name: 'start_recording',
+        description: 'Start recording the webtop screen. Uses ffmpeg to capture the desktop at 15fps. Only one recording can be active at a time. Call stop_recording when done.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                filename: { type: 'string', description: 'Optional custom filename (without extension). Auto-generated if not provided.' },
+            },
+            required: [],
+        },
+    },
+    {
+        name: 'stop_recording',
+        description: 'Stop the current screen recording and get the URL. The recording is saved and can be embedded in hub posts/comments using markdown: ![demo](url)',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            required: [],
         },
     },
 ];
@@ -866,6 +900,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
                 };
             }
+            case 'hub_set_post_status': {
+                const { post_id, status_text, status_color } = args;
+                const result = await apiCall('PATCH', `/api/hub/posts/${post_id}/status`, {
+                    status_text: status_text || null,
+                    status_color: status_color || null,
+                });
+                return {
+                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                };
+            }
             case 'hub_get_post': {
                 const { post_id } = args;
                 const post = await apiCall('GET', `/api/hub/posts/${post_id}`);
@@ -937,6 +981,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                 note: 'Use the markdown_image string to embed this image in a post or comment.',
                             }, null, 2),
                         }],
+                };
+            }
+            // === RECORDING TOOLS ===
+            case 'start_recording': {
+                const { filename } = args;
+                const result = await apiCall('POST', '/api/recording/start', { filename });
+                return {
+                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                };
+            }
+            case 'stop_recording': {
+                const result = await apiCall('POST', '/api/recording/stop', {});
+                return {
+                    content: [{ type: 'text', text: JSON.stringify({
+                                ...result,
+                                markdown_video: result.url ? `![demo](${result.url})` : undefined,
+                                note: result.url ? 'Use the markdown_video string to embed this video in a post or comment.' : undefined,
+                            }, null, 2) }],
                 };
             }
             default:
