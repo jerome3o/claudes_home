@@ -1732,9 +1732,10 @@ app.post('/api/recording/start', (req, res) => {
       ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`
       : `recording_${Date.now()}.mp4`;
 
-    // Start ffmpeg in detached mode inside the webtop container
+    // Start ffmpeg inside the webtop container using nohup + background
+    // docker exec -d is unreliable (process gets killed); bash -c 'nohup ... &' persists
     execSync(
-      `docker exec -d webtop ffmpeg -f x11grab -framerate 15 -video_size 1280x720 -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p /tmp/${filename}`,
+      `docker exec webtop bash -c 'nohup ffmpeg -nostdin -f x11grab -framerate 15 -video_size 1280x720 -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y /tmp/${filename} </dev/null >/dev/null 2>/tmp/ffmpeg.log &'`,
       { timeout: 30000 }
     );
 
@@ -1763,11 +1764,22 @@ app.post('/api/recording/stop', async (req, res) => {
       // pkill returns non-zero if no process found — that's OK
     }
 
-    // Wait for ffmpeg to finalize the file
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Wait for ffmpeg to finalize the file, poll until process exits
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      try {
+        execSync('docker exec webtop pgrep ffmpeg', { timeout: 5000 });
+        // Still running, keep waiting
+      } catch (e) {
+        break; // ffmpeg exited
+      }
+    }
 
-    // Copy file from container
-    execSync(`docker cp webtop:/tmp/${filename} ${RECORDINGS_DIR}/${filename}`, { timeout: 30000 });
+    // Copy file from container using cat pipe (docker cp can be unreliable)
+    execSync(
+      `docker exec webtop cat /tmp/${filename} > ${RECORDINGS_DIR}/${filename}`,
+      { timeout: 60000, shell: '/bin/bash' }
+    );
 
     // Clean up in container
     try {
