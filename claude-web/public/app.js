@@ -65,6 +65,7 @@ let selectSessionSeq = 0; // Batch 3: sequence counter for race condition preven
 let lastPingTime = null; // Track last server ping
 let activeMsgStatus = null; // Current message status element (for ack/working/done)
 let sessionQueryStates = {}; // { sessionId: boolean } — tracks active queries per session
+let sessionWaitingStates = {}; // { sessionId: boolean } — tracks "waiting for answer" per session
 
 // Pagination state
 const PAGE_SIZE = 50;
@@ -398,7 +399,7 @@ function handleServerMessage(data) {
 
   // Ignore messages from other sessions (prevents leaking)
   // BUT allow session_notification through — those are meant for cross-session display
-  if (data.sessionId && data.sessionId !== currentSessionId && data.type !== 'session_notification' && data.type !== 'session_query_state') {
+  if (data.sessionId && data.sessionId !== currentSessionId && data.type !== 'session_notification' && data.type !== 'session_query_state' && data.type !== 'session_waiting_for_answer') {
     console.log('Ignoring message for different session:', data.sessionId);
     return;
   }
@@ -482,6 +483,17 @@ function handleServerMessage(data) {
     case 'session_query_state':
       sessionQueryStates[data.sessionId] = data.active;
       renderSessions();
+      break;
+
+    case 'session_waiting_for_answer':
+      sessionWaitingStates[data.sessionId] = data.waiting;
+      renderSessions();
+      break;
+
+    case 'ask_user_question':
+      if (data.sessionId === currentSessionId) {
+        renderAskUserQuestion(data.input, data.sessionId);
+      }
       break;
   }
 }
@@ -641,6 +653,104 @@ function addToolUse(toolUse) {
   scrollToBottom();
 }
 
+function renderAskUserQuestion(input, sessionId) {
+  const container = document.createElement('div');
+  container.className = 'ask-user-question';
+
+  const questions = input.questions || [];
+  questions.forEach((q, qIndex) => {
+    const questionDiv = document.createElement('div');
+    questionDiv.className = 'ask-question-card';
+
+    // Header
+    const headerEl = document.createElement('div');
+    headerEl.className = 'ask-question-header';
+    headerEl.textContent = q.header || 'Question';
+    questionDiv.appendChild(headerEl);
+
+    // Question text
+    const questionText = document.createElement('div');
+    questionText.className = 'ask-question-text';
+    questionText.textContent = q.question;
+    questionDiv.appendChild(questionText);
+
+    // Options
+    const optionsDiv = document.createElement('div');
+    optionsDiv.className = 'ask-question-options';
+
+    const selectedAnswers = new Set();
+
+    q.options.forEach((opt) => {
+      const btn = document.createElement('button');
+      btn.className = 'ask-option-btn';
+      btn.innerHTML = `<span class="ask-option-label">${escapeHtml(opt.label)}</span>${opt.description ? `<span class="ask-option-desc">${escapeHtml(opt.description)}</span>` : ''}`;
+
+      btn.addEventListener('click', () => {
+        if (container.classList.contains('answered')) return;
+
+        if (q.multiSelect) {
+          btn.classList.toggle('selected');
+          if (selectedAnswers.has(opt.label)) {
+            selectedAnswers.delete(opt.label);
+          } else {
+            selectedAnswers.add(opt.label);
+          }
+        } else {
+          // Single select — answer immediately
+          btn.classList.add('selected');
+          container.classList.add('answered');
+
+          // Disable all buttons
+          container.querySelectorAll('.ask-option-btn').forEach(b => b.disabled = true);
+          // Hide submit buttons
+          container.querySelectorAll('.ask-submit-btn').forEach(b => b.style.display = 'none');
+
+          const answers = {};
+          answers[String(qIndex)] = opt.label;
+          send({
+            type: 'answer_user_question',
+            sessionId,
+            originalInput: input,
+            answers,
+          });
+        }
+      });
+
+      optionsDiv.appendChild(btn);
+    });
+
+    questionDiv.appendChild(optionsDiv);
+
+    // For multiSelect, add a submit button
+    if (q.multiSelect) {
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'ask-submit-btn';
+      submitBtn.textContent = 'Submit';
+      submitBtn.addEventListener('click', () => {
+        if (container.classList.contains('answered')) return;
+        container.classList.add('answered');
+        container.querySelectorAll('.ask-option-btn').forEach(b => b.disabled = true);
+        submitBtn.style.display = 'none';
+
+        const answers = {};
+        answers[String(qIndex)] = Array.from(selectedAnswers).join(', ');
+        send({
+          type: 'answer_user_question',
+          sessionId,
+          originalInput: input,
+          answers,
+        });
+      });
+      questionDiv.appendChild(submitBtn);
+    }
+
+    container.appendChild(questionDiv);
+  });
+
+  messages.appendChild(container);
+  scrollToBottom();
+}
+
 function updateToolProgress(event) {
   const toolDiv = messages.querySelector(`[data-tool-id="${event.tool_use_id}"]`);
   if (toolDiv) {
@@ -681,6 +791,7 @@ function groupSessionsByPrefix(sessions) {
 
 function renderSessionItem(session) {
   const isActive = sessionQueryStates[session.id];
+  const isWaiting = sessionWaitingStates[session.id];
   const unreadCount = unreadCounts[session.id] || 0;
   const unreadClass = unreadCount > 0 ? ' has-unread' : '';
 
@@ -691,9 +802,14 @@ function renderSessionItem(session) {
     : session.name;
 
   const timeStr = new Date(session.lastActive).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const statusHtml = isActive
-    ? '<span class="session-activity-dot"></span><span class="session-status-working">Working...</span>'
-    : `<span class="session-time">${timeStr}</span>`;
+  let statusHtml;
+  if (isWaiting) {
+    statusHtml = '<span class="session-activity-dot waiting"></span><span class="session-status-waiting">Waiting for answer...</span>';
+  } else if (isActive) {
+    statusHtml = '<span class="session-activity-dot"></span><span class="session-status-working">Working...</span>';
+  } else {
+    statusHtml = `<span class="session-time">${timeStr}</span>`;
+  }
 
   return `
     <div class="session-item compact ${session.id === currentSessionId ? 'active' : ''}${unreadClass}${session.pinned ? ' pinned' : ''}"

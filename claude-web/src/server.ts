@@ -645,6 +645,8 @@ const activeQueries = new Map<string, Query>();
 const sessionConnections = new Map<string, Set<WebSocket>>();
 // Track ALL connected websockets for cross-session notifications
 const allConnections = new Set<WebSocket>();
+// Pending AskUserQuestion promises — blocks canUseTool until user responds
+const pendingUserQuestions = new Map<string, { resolve: (answer: any) => void }>();
 // Queries run to completion even if all clients disconnect.
 // No orphan abort — user wants async background execution.
 
@@ -2911,6 +2913,19 @@ wss.on('connection', (ws: WebSocket & { isAlive?: boolean }) => {
           break;
         }
 
+        case 'answer_user_question': {
+          const { sessionId: answerSessionId, answers, originalInput } = message;
+          const pending = pendingUserQuestions.get(answerSessionId);
+          if (pending) {
+            pending.resolve({ ...originalInput, answers });
+            pendingUserQuestions.delete(answerSessionId);
+            console.log(`[ask] User answered question for session ${answerSessionId}`);
+          } else {
+            console.log(`[ask] No pending question for session ${answerSessionId}`);
+          }
+          break;
+        }
+
         default:
           console.log('Unknown message type:', message.type);
       }
@@ -3000,10 +3015,12 @@ async function handleSendMessage(ws: WebSocket, message: any) {
         preset: 'claude_code',
         append: `\n\nYour identity: You are agent "${sessionName}" (session ID: ${sessionId}). You can use this information when communicating with other agents or when you need to identify yourself. You can rename yourself using: curl -X PATCH http://localhost:${PORT}/api/sessions/${sessionId} -H 'Content-Type: application/json' -d '{"name": "New Name"}'`,
       },
-      canUseTool: async (toolName, input) => ({
-        behavior: 'allow',
-        updatedInput: input,
-      }),
+      canUseTool: async (toolName, input) => {
+        if (toolName === 'AskUserQuestion') {
+          return handleAskUserQuestion(sessionId, input);
+        }
+        return { behavior: 'allow', updatedInput: input };
+      },
     };
 
     // Resume if session ID provided
@@ -3231,6 +3248,49 @@ function broadcastQueryState(sessionId: string, active: boolean) {
   broadcastToAll({ type: 'session_query_state', sessionId, active });
 }
 
+// Handle AskUserQuestion tool — broadcasts to frontend, sends push notification, blocks until user responds
+async function handleAskUserQuestion(sessionId: string, input: any): Promise<{ behavior: 'allow'; updatedInput: any }> {
+  // Broadcast question to frontend
+  broadcastToSession(sessionId, {
+    type: 'ask_user_question',
+    sessionId,
+    toolName: 'AskUserQuestion',
+    input,
+    timestamp: Date.now(),
+  });
+
+  // Show "Waiting for answer" in sidebar
+  broadcastToAll({
+    type: 'session_waiting_for_answer',
+    sessionId,
+    waiting: true,
+  });
+
+  // Send ntfy push notification
+  const sessionObj = stmts.getSession.get(sessionId) as any;
+  const agentName = sessionObj?.name || 'An agent';
+  const firstQuestion = input.questions?.[0]?.question || 'has a question for you';
+  sendNtfyNotification(
+    `${agentName} needs your input`,
+    firstQuestion,
+    'question'
+  );
+
+  // Block until user responds
+  const answer = await new Promise<any>((resolve) => {
+    pendingUserQuestions.set(sessionId, { resolve });
+  });
+
+  // Clear waiting state
+  broadcastToAll({
+    type: 'session_waiting_for_answer',
+    sessionId,
+    waiting: false,
+  });
+
+  return { behavior: 'allow', updatedInput: answer };
+}
+
 function notifyQueryWatchers(sessionId: string) {
   try {
     const watchers = stmts.querySubGetWatchers.all(sessionId) as any[];
@@ -3411,10 +3471,12 @@ async function executeTask(task: any, triggerType: string, triggerData?: any): P
       ...(task.max_turns > 0 && { maxTurns: task.max_turns }),
       ...(task.max_budget_usd > 0 && { maxBudgetUsd: task.max_budget_usd }),
       ...(task.model && { model: task.model }),
-      canUseTool: async (toolName, input) => ({
-        behavior: 'allow',
-        updatedInput: input,
-      }),
+      canUseTool: async (toolName, input) => {
+        if (toolName === 'AskUserQuestion') {
+          return handleAskUserQuestion(sessionId, input);
+        }
+        return { behavior: 'allow', updatedInput: input };
+      },
     };
 
     if (session?.sdkSessionId) {
@@ -3571,10 +3633,12 @@ async function processIncomingMessage(sessionId: string, content: string): Promi
       preset: 'claude_code',
       append: `\n\nYour identity: You are agent "${incomingSessionName}" (session ID: ${sessionId}). You can use this information when communicating with other agents or when you need to identify yourself. You can rename yourself using: curl -X PATCH http://localhost:${PORT}/api/sessions/${sessionId} -H 'Content-Type: application/json' -d '{"name": "New Name"}'`,
     },
-    canUseTool: async (toolName: string, input: any) => ({
-      behavior: 'allow' as const,
-      updatedInput: input,
-    }),
+    canUseTool: async (toolName: string, input: any) => {
+      if (toolName === 'AskUserQuestion') {
+        return handleAskUserQuestion(sessionId, input);
+      }
+      return { behavior: 'allow' as const, updatedInput: input };
+    },
   };
 
   if (session?.sdkSessionId) {
