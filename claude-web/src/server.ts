@@ -1732,10 +1732,22 @@ app.post('/api/recording/start', (req, res) => {
       ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`
       : `recording_${Date.now()}.mp4`;
 
+    // Detect actual screen resolution from webtop
+    let videoSize = '1920x1080'; // sensible default
+    try {
+      const res_output = execSync(
+        `docker exec webtop xrandr --display :1 2>/dev/null | grep '\\*' | awk '{print $1}'`,
+        { timeout: 5000 }
+      ).toString().trim();
+      if (/^\d+x\d+$/.test(res_output)) {
+        videoSize = res_output;
+      }
+    } catch { /* use default */ }
+
     // Start ffmpeg inside the webtop container using nohup + background
     // docker exec -d is unreliable (process gets killed); bash -c 'nohup ... &' persists
     execSync(
-      `docker exec webtop bash -c 'nohup ffmpeg -nostdin -f x11grab -framerate 15 -video_size 1280x720 -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y /tmp/${filename} </dev/null >/dev/null 2>/tmp/ffmpeg.log &'`,
+      `docker exec webtop bash -c 'nohup ffmpeg -nostdin -f x11grab -framerate 15 -video_size ${videoSize} -i :1 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y /tmp/${filename} </dev/null >/dev/null 2>/tmp/ffmpeg.log &'`,
       { timeout: 30000 }
     );
 
